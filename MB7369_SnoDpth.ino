@@ -11,13 +11,24 @@ DATE:2021-10-18
 #include "RTClib.h" //Needed for communication with Real Time Clock
 #include <SPI.h>//Needed for working with SD card
 #include <SD.h>//Needed for working with SD card
-#include "Adafruit_SHT31.h"//Needed for SHT31 Temp/Humid sensor 
+#include "Adafruit_SHT31.h"//Needed for SHT31 Temp/Humid sensor
+#include <IridiumSBD.h> 
+#include <Wire.h>
 
 /*Create librire instanceses*/
 RTC_PCF8523 rtc; //instantiate PCF8523 RTC
 File dataFile;//instantiate a logging file
 Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT31 sensor
 
+#define IridiumWire Wire //instantiate iridium satallite modem
+IridiumSBD modem(IridiumWire);
+
+// For USB "low current" applications
+modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
+modem.sleep(); // Put the modem to sleep
+modem.enable9603Npower(false); // Disable power for the 9603N
+modem.enableSuperCapCharger(false); // Disable the super capacitor charger
+modem.enable841lowPower(true); // Enable the ATtiny841's low power mode 
 
 /*Define pinouts*/
 const byte pulsePin = 12; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
@@ -29,6 +40,8 @@ const byte led = 13; // Pin 13 LED
 /*Global constants*/
 const String filename = "SnoDTEST.TXT";//Desired name for logfile !!!must be less than equal to 8 char!!!
 const long N = 6; //Number of sensor readings to average.
+const int transmitHours[] = {0};
+const int logging_intv_min = 5;
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
@@ -63,10 +76,39 @@ long read_sensor(int N) {
 }
 
 
+boolean check_transmit()
+{
+  boolean transmit = false;
+  
+  DateTime now = rtc.now();
+  int current_hour = now.hour();
+  int current_minute = now.minute();
+
+  int ary_size = sizeof(transmitHours);
+
+  for (int i = 0; i < (sizeof(transmitHours) / sizeof(transmitHours[0])); i++)
+  {
+    if (transmitHours[i] == current_hour && current_minute<=(logging_intv_min+1))
+    {
+      transmit = true;
+    }
+
+    delay(1);
+  }
+
+  return transmit;
+
+}
+
 //Code runs once upon waking up the TPL5110
 void setup() {
 
   //Set pin modes
+  
+  //turn off built in LED
+  pinMode(led,OUTPUT);
+  digitalWrite(led,LOW);
+  
   pinMode(pulsePin, INPUT);
   pinMode(triggerPin, OUTPUT);
   digitalWrite(triggerPin, LOW);
@@ -128,7 +170,21 @@ void setup() {
     dataFile.close();
   }
 
+  //Check that the iridium modem is connected and the hour matches one of the desired transmit hours (0-24) (transmitHours[])
+  if(check_transmit() && modem.isConnected())
+  { 
+    modem.enableSuperCapCharger(true); // Enable the super capacitor charger
+    while (!modem.checkSuperCapCharger()) ; // Wait for the capacitors to charge
+    modem.enable9603Npower(true); // Enable power for the 9603N
+    modem.begin(); // Wake up the 9603N and prepare it for communications.
+    modem.sendSBDText(datastring.c_str()); // Send a message
+    modem.sleep(); // Put the modem to sleep
+    modem.enable9603Npower(false); // Disable power for the 9603N
+    modem.enableSuperCapCharger(false); // Disable the super capacitor charger
+    modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
+  }
 
+  
 }
 
 void loop() {
