@@ -1,34 +1,30 @@
-/* 
-DESCRIPTION: Arduino code for MaxBotix MB7369 weather resistant ultrasonic distance sensor, and SHT31 temperture / humidity sensor. For use with Adafruit Feather M0 Adalogger and PCF8523 real time clock.
-Power managment is done through the Sparkfun TPL5110 low-power breakout, ~logging interval is determined by arranging switches on the TPL5110 chip (https://www.sparkfun.com/products/15353). All communication is
-I2C, however, MB7369 readings are read via the pulse width output pin.
-AUTHOR:Hunter Gleason
-AGENCY:FLNRORD
-DATE:2021-10-18
+/*
+  DESCRIPTION: Arduino code for MaxBotix MB7369 weather resistant ultrasonic distance sensor, and SHT30 temperature / humidity sensor. For use with Adafruit Feather M0 Adalogger and PCF8523 real time clock.
+  Power management is done through the Sparkfun TPL5110 low-power breakout, ~logging interval is determined by arranging switches on the TPL5110 chip (https://www.sparkfun.com/products/15353). All communication is
+  I2C, however, MB7369 readings are read via the pulse width output pin.
+  AUTHOR:Hunter Gleason
+  AGENCY:FLNRORD
+  DATE:2021-10-18
 */
 
-/*Required libriries*/
+/*Required libraries*/
 #include "RTClib.h" //Needed for communication with Real Time Clock
 #include <SPI.h>//Needed for working with SD card
 #include <SD.h>//Needed for working with SD card
-#include "Adafruit_SHT31.h"//Needed for SHT31 Temp/Humid sensor
-#include <IridiumSBD.h> 
+#include "Adafruit_SHT31.h"//Needed for SHT30 Temp/Humid sensor
+#include <IridiumSBD.h>
 #include <Wire.h>
 
-/*Create librire instanceses*/
+/*Create library instances*/
 RTC_PCF8523 rtc; //instantiate PCF8523 RTC
 File dataFile;//instantiate a logging file
-Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT31 sensor
+Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT30 sensor
 
-#define IridiumWire Wire //instantiate iridium satallite modem
+#define IridiumWire Wire
+
+// Declare the IridiumSBD object using default I2C address
 IridiumSBD modem(IridiumWire);
 
-// For USB "low current" applications
-modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
-modem.sleep(); // Put the modem to sleep
-modem.enable9603Npower(false); // Disable power for the 9603N
-modem.enableSuperCapCharger(false); // Disable the super capacitor charger
-modem.enable841lowPower(true); // Enable the ATtiny841's low power mode 
 
 /*Define pinouts*/
 const byte pulsePin = 12; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
@@ -37,22 +33,22 @@ const byte donePin = 10; //Done pin for TPL5110 power breakout
 const byte chipSelect = 4; //Chip select pin for MicroSD breakout
 const byte led = 13; // Pin 13 LED
 
-/*Global constants*/
-const String filename = "SnoDTEST.TXT";//Desired name for logfile !!!must be less than equal to 8 char!!!
+/*Global constants (!!General user modify code in this section only!!)*/
+const String filename = "SnoDTEST.TXT";//Desired name for data file !!!must be less than equal to 8 char!!!
 const long N = 6; //Number of sensor readings to average.
-const int transmitHours[] = {0};
-const int logging_intv_min = 5;
+const int transmitHours[] = {0};//List of hours for which daily Iridium transmission is to take place (0-23). 
+const int logging_intv_min = 5;//Should match settings on TPL5110 (i.e., the switch combination), when using Iridium recommended min logging interval of >=5-min do to required transmit time during periods of poor signal quality, otherwise tranmission may fail. 
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
 long duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
-float temp_c;
-float humid_prct;
+float temp_c; //Variable for holding SHT30 temperature 
+float humid_prct; //Variable for holding SHT30 humidity 
 
-//Function for averageing N readings from MaxBotix MB7369 ultrasonic ranger
+//Function for averaging N readings from MaxBotix MB7369 ultrasonic ranger
 long read_sensor(int N) {
 
-  //Varible for average distance
+  //Variable for average distance
   long avg_dist = 0;
 
   //Take N readings
@@ -75,21 +71,24 @@ long read_sensor(int N) {
   return avg_dist;
 }
 
-
+//Function loops through Iridium transmit hours (0-23) specified in transmitHours and checks if the current hour matches, and the minute is less then or equal to one logging interval (logging_intv_min)
 boolean check_transmit()
 {
-  boolean transmit = false;
-  
-  DateTime now = rtc.now();
+  boolean transmit = false;//Assume false for transmit
+
+  DateTime now = rtc.now();//Get the current time from RTC, including hour and minute values
   int current_hour = now.hour();
   int current_minute = now.minute();
 
-  int ary_size = sizeof(transmitHours);
+  int ary_size = sizeof(transmitHours);//Get size of transmitHours array
 
+  //For each transmit hour in transmitHours
   for (int i = 0; i < (sizeof(transmitHours) / sizeof(transmitHours[0])); i++)
   {
-    if (transmitHours[i] == current_hour && current_minute<=(logging_intv_min+1))
+    //Check if it matches the current hour, and minute is less then or equal to 1 logging interval, dictated by the TPL5110 settings, and specified by logging_intv_min
+    if (transmitHours[i] == current_hour && current_minute <= logging_intv_min)
     {
+      //If the current time is a transmit period set transmit to true
       transmit = true;
     }
 
@@ -104,18 +103,37 @@ boolean check_transmit()
 void setup() {
 
   //Set pin modes
-  
+
   //turn off built in LED
-  pinMode(led,OUTPUT);
-  digitalWrite(led,LOW);
-  
+  pinMode(led, OUTPUT);
+  digitalWrite(led, LOW);
+
   pinMode(pulsePin, INPUT);
   pinMode(triggerPin, OUTPUT);
   digitalWrite(triggerPin, LOW);
   pinMode(donePin, OUTPUT);
 
+  // Start the I2C wire port connected to the satellite modem
+  Wire.begin();
 
-  // Start RTC (1-sec flash LED means RTC did not intialize)
+  // Check that the Qwiic Iridium is attached (5-sec flash LED means Qwiic Iridium did not initialize)
+  while(!modem.isConnected())
+  {
+    digitalWrite(led, HIGH);
+    delay(5000);
+    digitalWrite(led, LOW);
+    delay(5000);
+  }
+
+  // For USB "low current" applications
+  modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
+  modem.sleep(); // Put the modem to sleep
+  modem.enable9603Npower(false); // Disable power for the 9603N
+  modem.enableSuperCapCharger(false); // Disable the super capacitor charger
+  modem.enable841lowPower(true); // Enable the ATtiny841's low power mode
+
+
+  // Start RTC (1-sec flash LED means RTC did not initialize)
   while (!rtc.begin()) {
     digitalWrite(led, HIGH);
     delay(1000);
@@ -130,7 +148,7 @@ void setup() {
   distance = read_sensor(N);
 
 
-  while (!sht31.begin(0x44)) {  // Start SHT31, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT31 did not initalize)
+  while (!sht31.begin(0x44)) {  // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT30 did not initialize)
     digitalWrite(led, HIGH);
     delay(2000);
     digitalWrite(led, LOW);
@@ -140,7 +158,7 @@ void setup() {
   temp_c = sht31.readTemperature();
   humid_prct = sht31.readHumidity();
 
-  //If humidty is above 80% turn on SHT31 heater to evaporate condensation, retake humidty measurment 
+  //If humidity is above 80% turn on SHT31 heater to evaporate condensation, retake humidity measurement
   if (humid_prct >= 80)
   {
     sht31.heater(true);
@@ -151,10 +169,10 @@ void setup() {
   }
 
 
-  //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperture (deg C) and humidity (%)
-  String datastring = String(now.year()) + "-" + String(now.month()) + "-" + String(now.day()) + " " + String(now.hour()) + ":" + String(now.minute()) + ":" + String(now.second()) + "," + String(distance) + ",mm,"+String(temp_c)+",deg C,"+String(humid_prct)+",%";
+  //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
+  String datastring = String(now.year()) + "-" + String(now.month()) + "-" + String(now.day()) + " " + String(now.hour()) + ":" + String(now.minute()) + ":" + String(now.second()) + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
 
-  //Make sure a SD is available (1/2-sec flash LED means SD card did not initalize)
+  //Make sure a SD is available (1/2-sec flash LED means SD card did not initialize)
   while (!SD.begin(chipSelect)) {
     digitalWrite(led, HIGH);
     delay(500);
@@ -171,8 +189,10 @@ void setup() {
   }
 
   //Check that the iridium modem is connected and the hour matches one of the desired transmit hours (0-24) (transmitHours[])
-  if(check_transmit() && modem.isConnected())
-  { 
+  if (check_transmit() && modem.isConnected())
+  {
+    //digitalWrite(led, HIGH); //For trouble shooting
+
     modem.enableSuperCapCharger(true); // Enable the super capacitor charger
     while (!modem.checkSuperCapCharger()) ; // Wait for the capacitors to charge
     modem.enable9603Npower(true); // Enable power for the 9603N
@@ -182,9 +202,11 @@ void setup() {
     modem.enable9603Npower(false); // Disable power for the 9603N
     modem.enableSuperCapCharger(false); // Disable the super capacitor charger
     modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
+ 
+    //digitalWrite(led, LOW); //For trouble shooting
   }
 
-  
+
 }
 
 void loop() {
