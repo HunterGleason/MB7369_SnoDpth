@@ -14,6 +14,7 @@
 #include "Adafruit_SHT31.h"//Needed for SHT30 Temp/Humid sensor
 #include <IridiumSBD.h>
 #include <Wire.h>
+#include <CSV_Parser.h>//Needed for parsing CSV data
 
 /*Create library instances*/
 RTC_PCF8523 rtc; //instantiate PCF8523 RTC
@@ -36,14 +37,13 @@ const byte led = 13; // Pin 13 LED
 /*Global constants (!!General user modify code in this section only!!)*/
 const String filename = "SnoDTEST.TXT";//Desired name for data file !!!must be less than equal to 8 char!!!
 const long N = 6; //Number of sensor readings to average.
-const int transmitHours[] = {0};//List of hours for which daily Iridium transmission is to take place (0-23). 
-const int logging_intv_min = 5;//Should match settings on TPL5110 (i.e., the switch combination), when using Iridium recommended min logging interval of >=5-min do to required transmit time during periods of poor signal quality, otherwise tranmission may fail. 
+const int logging_intv_min =5; //Approximate logging interval in minutes !!Needs to match the settings of the TPL5110 low power timer!! 
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
 long duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
-float temp_c; //Variable for holding SHT30 temperature 
-float humid_prct; //Variable for holding SHT30 humidity 
+float temp_c; //Variable for holding SHT30 temperature
+float humid_prct; //Variable for holding SHT30 humidity
 
 //Function for averaging N readings from MaxBotix MB7369 ultrasonic ranger
 long read_sensor(int N) {
@@ -71,33 +71,6 @@ long read_sensor(int N) {
   return avg_dist;
 }
 
-//Function loops through Iridium transmit hours (0-23) specified in transmitHours and checks if the current hour matches, and the minute is less then or equal to one logging interval (logging_intv_min)
-boolean check_transmit()
-{
-  boolean transmit = false;//Assume false for transmit
-
-  DateTime now = rtc.now();//Get the current time from RTC, including hour and minute values
-  int current_hour = now.hour();
-  int current_minute = now.minute();
-
-  int ary_size = sizeof(transmitHours);//Get size of transmitHours array
-
-  //For each transmit hour in transmitHours
-  for (int i = 0; i < (sizeof(transmitHours) / sizeof(transmitHours[0])); i++)
-  {
-    //Check if it matches the current hour, and minute is less then or equal to 1 logging interval, dictated by the TPL5110 settings, and specified by logging_intv_min
-    if (transmitHours[i] == current_hour && current_minute <= logging_intv_min)
-    {
-      //If the current time is a transmit period set transmit to true
-      transmit = true;
-    }
-
-    delay(1);
-  }
-
-  return transmit;
-
-}
 
 //Code runs once upon waking up the TPL5110
 void setup() {
@@ -117,7 +90,7 @@ void setup() {
   Wire.begin();
 
   // Check that the Qwiic Iridium is attached (5-sec flash LED means Qwiic Iridium did not initialize)
-  while(!modem.isConnected())
+  while (!modem.isConnected())
   {
     digitalWrite(led, HIGH);
     delay(5000);
@@ -168,9 +141,50 @@ void setup() {
     sht31.heater(false);
   }
 
+  String yr_str = String(now.year());
+  String mnth_str;
+  if (now.month() >= 10)
+  {
+    mnth_str = String(now.month());
+  } else {
+    mnth_str = "0" + String(now.month());
+  }
+
+  String day_str;
+  if (now.day() >= 10)
+  {
+    day_str = String(now.day());
+  } else {
+    day_str = "0" + String(now.day());
+  }
+
+  String hr_str;
+  if (now.hour() >= 10)
+  {
+    hr_str = String(now.hour());
+  } else {
+    hr_str = "0" + String(now.hour());
+  }
+
+  String min_str;
+  if (now.min() >= 10)
+  {
+    min_str = String(now.minute());
+  } else {
+    min_str = "0" + String(now.minute());
+  }
+
+
+  String sec_str;
+  if (now.second() >= 10)
+  {
+    sec_str = String(now.second());
+  } else {
+    sec_str = "0" + String(now.second());
+  }
 
   //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
-  String datastring = String(now.year()) + "-" + String(now.month()) + "-" + String(now.day()) + " " + String(now.hour()) + ":" + String(now.minute()) + ":" + String(now.second()) + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
+  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
 
   //Make sure a SD is available (1/2-sec flash LED means SD card did not initialize)
   while (!SD.begin(chipSelect)) {
@@ -188,8 +202,8 @@ void setup() {
     dataFile.close();
   }
 
-  //Check that the iridium modem is connected and the hour matches one of the desired transmit hours (0-24) (transmitHours[])
-  if (check_transmit() && modem.isConnected())
+  //Check that the iridium modem is connected and the the clock has just reached midnight (i.e.,current time is within one logging interval of midnight)
+  if (now.hour() == 0 && now.minute() <= logging_intv_min && modem.isConnected())
   {
     //digitalWrite(led, HIGH); //For trouble shooting
 
@@ -197,12 +211,93 @@ void setup() {
     while (!modem.checkSuperCapCharger()) ; // Wait for the capacitors to charge
     modem.enable9603Npower(true); // Enable power for the 9603N
     modem.begin(); // Wake up the 9603N and prepare it for communications.
-    modem.sendSBDText(datastring.c_str()); // Send a message
+
+    /*Need to obtain the daily observations from the SD card and transmit binary values over Iridium, depending on the logging interval this will likley require 10-15 transmissions*/ 
+    
+    //Get curren year, month day
+    int current_year = now.year();
+    int current_month = now.month();
+    int current_day = now.day();
+
+    //Set paramters for parsing the log file
+    CSV_Parser cp("ss-s-s-", false, ',');
+
+    //Varibles for holding data fields 
+    char **datetimes;
+    char **snowdepths;
+    char **temps;
+    char **rh;
+
+    //Parse the logfile
+    cp.readSDfile(filename);
+
+    datetimes = (char**)cp[0];
+    snowdepths = (char**)cp[1];
+    temps = (char**)cp[3];
+    rh = (char**)cp[5];
+
+    //String for holding daily observations
+    String iridium_string;
+
+    //For each observation in the CSV 
+    for (int i = 0; i < cp.getRowsCount(); i++) {
+
+      //Get the datetime stamp as string 
+      String datetime = String(datetimes[i]);
+
+      //Get the observations year, month, day
+      int dt_year = datetime.substring(0, 4).toInt();
+      int dt_month = datetime.substring(5, 7).toInt();
+      int dt_day = datetime.substring(8, 10).toInt();
+
+      //Check if the observations datetime occured during the current day 
+      if (dt_year == current_year && dt_month == current_month && dt_day == current_day)
+      {
+        //Append the observation to the iridium string 
+        String datastring = "{" + String(datetimes[i]) + "," + String(snowdepths[i]) + "," + String(temps[i]) + "," + String(rh[i]) + "}";
+        irid_string = iridium_string + datastring;
+
+      }
+
+    }
+
+    //varible for keeping a byte count 
+    int byte_count = 0;
+
+    //Length of the iridium string in bytes
+    int str_len = iridium_string.length()+1;
+
+    //Convert iridium_string to character array 
+    char char_array[str_len];
+    iridium_string.toCharArray(char_array,str_len);
+
+    //Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
+    uint8_t buffer[340];
+
+    //For each charachter in the iridium string (i.e., string of the daily observations)
+    for(int j=0; j<str_len;j++)
+    { 
+      //add character to the binary buffer, increment the byte count 
+      buffer[byte_count]=char_array[j];
+      byte_count = byte_count+1;
+
+       //If maximum bytes have been reached 
+      if(byte_count==340)
+      {
+        //reset byte count 
+        byte_count=0;
+
+        //transmit binary buffer data via iridium
+        sendSBDBinary(buffer,sizeof(buffer));
+
+      }
+    }
+    
     modem.sleep(); // Put the modem to sleep
     modem.enable9603Npower(false); // Disable power for the 9603N
     modem.enableSuperCapCharger(false); // Disable the super capacitor charger
     modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
- 
+
     //digitalWrite(led, LOW); //For trouble shooting
   }
 
