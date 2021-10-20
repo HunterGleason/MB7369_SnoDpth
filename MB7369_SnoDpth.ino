@@ -35,9 +35,9 @@ const byte chipSelect = 4; //Chip select pin for MicroSD breakout
 const byte led = 13; // Pin 13 LED
 
 /*Global constants (!!General user modify code in this section only!!)*/
-const String filename = "SnoDTEST.TXT";//Desired name for data file !!!must be less than equal to 8 char!!!
+const char* filename = "SNODTEST.TXT";//Desired name for data file !!!must be less than equal to 8 char!!!
 const long N = 6; //Number of sensor readings to average.
-const int logging_intv_min =5; //Approximate logging interval in minutes !!Needs to match the settings of the TPL5110 low power timer!! 
+const int logging_intv_min = 5; //Approximate logging interval in minutes !!Needs to match the settings of the TPL5110 low power timer!! 
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
@@ -167,7 +167,7 @@ void setup() {
   }
 
   String min_str;
-  if (now.min() >= 10)
+  if (now.minute() >= 10)
   {
     min_str = String(now.minute());
   } else {
@@ -214,10 +214,9 @@ void setup() {
 
     /*Need to obtain the daily observations from the SD card and transmit binary values over Iridium, depending on the logging interval this will likley require 10-15 transmissions*/ 
     
-    //Get curren year, month day
-    int current_year = now.year();
-    int current_month = now.month();
-    int current_day = now.day();
+
+    //Get the datetime of the days start (i.e., 24 hours previous to current time)
+    DateTime days_start (now - TimeSpan(1,0,0,0));
 
     //Set paramters for parsing the log file
     CSV_Parser cp("ss-s-s-", false, ',');
@@ -251,11 +250,11 @@ void setup() {
       int dt_day = datetime.substring(8, 10).toInt();
 
       //Check if the observations datetime occured during the current day 
-      if (dt_year == current_year && dt_month == current_month && dt_day == current_day)
+      if (dt_year == days_start.year() && dt_month == days_start.month() && dt_day == days_start.day())
       {
         //Append the observation to the iridium string 
         String datastring = "{" + String(datetimes[i]) + "," + String(snowdepths[i]) + "," + String(temps[i]) + "," + String(rh[i]) + "}";
-        irid_string = iridium_string + datastring;
+        iridium_string = iridium_string + datastring;
 
       }
 
@@ -288,7 +287,7 @@ void setup() {
         byte_count=0;
 
         //transmit binary buffer data via iridium
-        sendSBDBinary(buffer,sizeof(buffer));
+        modem.sendSBDBinary(buffer,sizeof(buffer));
 
       }
     }
