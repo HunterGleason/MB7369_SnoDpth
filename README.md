@@ -7,7 +7,7 @@ See (link) for wiring schematic. Time is kept using the PCF8523 real time clock,
 # Parameter File
 An example of the 'snowlog.csv' is shown below, this file must be saved to the micro-SD before using this script:
 
-filename,N,log_intv
+filename,N,log_intv<br/>
 snowtest.csv,6,5
 
 There are three columns that must be present, delimited by commas. The first column named *filename* is the desired name for the data log file, **and must be less than or equal to 8 characters, containing only letters and numbers!** The second column *N* is the number of samples to average when taking distance readings from the MaxBotix MB7369 ultrasonic sensor. Finally, *log_intv* is the approximate logging interval, which is determined by the switch configuration on the Sparkfun TPL5110 breakout board. For proper Iridium communication it is important that the *log_intv* value corresponds with the switch configuration on the TPL5110. If using a *log_intv* less than 5-minutes then Iridium communication may fail.
