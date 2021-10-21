@@ -1,7 +1,5 @@
 /*
-  DESCRIPTION: Arduino code for MaxBotix MB7369 weather resistant ultrasonic distance sensor, and SHT30 temperature / humidity sensor. For use with Adafruit Feather M0 Adalogger and PCF8523 real time clock.
-  Power management is done through the Sparkfun TPL5110 low-power breakout, ~logging interval is determined by arranging switches on the TPL5110 chip (https://www.sparkfun.com/products/15353). All communication is
-  I2C, however, MB7369 readings are read via the pulse width output pin.
+  DESCRIPTION: See https://github.com/HunterGleason/MB7369_SnoDpth/blob/wth_iridium_hrly/MB7369_SnoDpth.ino
   AUTHOR:Hunter Gleason
   AGENCY:FLNRORD
   DATE:2021-10-18
@@ -34,10 +32,11 @@ const byte donePin = 10; //Done pin for TPL5110 power breakout
 const byte chipSelect = 4; //Chip select pin for MicroSD breakout
 const byte led = 13; // Pin 13 LED
 
-/*Global constants (!!General user modify code in this section only!!)*/
-const char* filename = "SNODTEST.TXT";//Desired name for data file !!!must be less than equal to 8 char!!!
-const long N = 6; //Number of sensor readings to average.
-const int logging_intv_min = 5; //Approximate logging interval in minutes !!Needs to match the settings of the TPL5110 low power timer!! 
+/*Global constants*/
+char **filename;//Desired name for data file !!!must be less than equal to 8 char!!!
+char **N; //Number of ultrasonic reange sensor readings to average.
+char **logging_intv_min;//Should match settings on TPL5110 (i.e., the switch combination), when using Iridium recommended min logging interval of >=5-min do to required transmit time during periods of poor signal quality, otherwise tranmission may fail. 
+
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
@@ -114,11 +113,31 @@ void setup() {
     delay(1000);
   }
 
+    //Make sure a SD is available (1/2-sec flash LED means SD card did not initialize)
+  while (!SD.begin(chipSelect)) {
+    digitalWrite(led, HIGH);
+    delay(500);
+    digitalWrite(led, LOW);
+    delay(500);
+  }
+
+   //Set paramters for parsing the parameter file
+  CSV_Parser cp(/*format*/ "sss", /*has_header*/ true, /*delimiter*/ ',');
+
+  //Read the parameter file off SD card (snowlog.csv), see README.md 
+  cp.readSDfile("/snowlog.csv");
+
+  //Read values from SNOW_PARAM.TXT into global varibles 
+  filename = (char**)cp["filename"];
+  N = (char**)cp["N"];
+  logging_intv_min = (char**)cp["log_intv"];
+
+  
   //Get current logging time from RTC
   DateTime now = rtc.now();
 
   //Read N average ranging distance from MB7369
-  distance = read_sensor(N);
+  distance = read_sensor(String(N[0].toInt()));
 
 
   while (!sht31.begin(0x44)) {  // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT30 did not initialize)
@@ -186,16 +205,8 @@ void setup() {
   //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
   String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
 
-  //Make sure a SD is available (1/2-sec flash LED means SD card did not initialize)
-  while (!SD.begin(chipSelect)) {
-    digitalWrite(led, HIGH);
-    delay(500);
-    digitalWrite(led, LOW);
-    delay(500);
-  }
-
   //Write datastring and close logfile on SD card
-  dataFile = SD.open(filename, FILE_WRITE);
+  dataFile = SD.open(filename[0], FILE_WRITE);
   if (dataFile)
   {
     dataFile.println(datastring);
@@ -203,7 +214,7 @@ void setup() {
   }
 
   //Check that the iridium modem is connected and the the clock has just reached midnight (i.e.,current time is within one logging interval of midnight)
-  if (now.hour() == 0 && now.minute() <= logging_intv_min && modem.isConnected())
+  if (now.hour() == 0 && now.minute() <= String(logging_intv_min[0]).toInt() && modem.isConnected())
   {
     //digitalWrite(led, HIGH); //For trouble shooting
 
@@ -228,7 +239,7 @@ void setup() {
     char **rh;
 
     //Parse the logfile
-    cp.readSDfile(filename);
+    cp.readSDfile(filename[0]);
 
     datetimes = (char**)cp[0];
     snowdepths = (char**)cp[1];
