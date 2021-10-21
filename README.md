@@ -6,8 +6,20 @@ Assuming that the Arduino IDE is already installed, and configured for use with 
 
 ``` bash
 cd ~/Arduino
-get clone 
+git clone https://github.com/HunterGleason/MB7369_SnoDpth.git
+git checkout wth_iridium
 ```
+This script relies on the following librbries, wich can be installed using the Libriry Manger in the Arduino IDE:
+
+- <RTClib.h> //Needed for communication with Real Time Clock
+- <SPI.h>//Needed for working with SD card
+- <SD.h>//Needed for working with SD card
+- <Adafruit_SHT31.h>//Needed for SHT30 Temp/Humid sensor
+- <IridiumSBD.h>//Needed for communication with the 9603N Iridium modem
+- <Wire.h>//Needed for I2C communication
+- <CSV_Parser.h>//Needed for parsing CSV data
+
+Once all the required libries are present, I reccomond seting the PCF8523 RTC, described in Adafruit [PCF8523](https://learn.adafruit.com/adafruit-pcf8523-real-time-clock/). After the RTC has been set, obtain a micro-SD card, and using a text editor, add save the 'snowlog.csv' parameter file described below with desired parameters. Check that the switiches on the  [Sparkfun 9603N](https://www.sparkfun.com/products/16394) match the desired logging interval. Upload the MB7369_SnoDpth to the MCU, unplug the USB, and plug in the USB adapter wired to the TPL5110 [schematic](https://github.com/HunterGleason/MB7369_SnoDpth/blob/wth_iridium/MB7369_SnoDpth.svg) into the MCU. If a battery is connected, logging should begin, be sure to disconnect power before removing the micro-SD.
 
 # Operation 
 See [schematic](https://github.com/HunterGleason/MB7369_SnoDpth/blob/wth_iridium/MB7369_SnoDpth.svg) for wiring schematic. Time is kept using the PCF8523 real time clock, be sure to set the RTC to the desired time before use [Adafruit PCF8523](https://learn.adafruit.com/adafruit-pcf8523-real-time-clock/). Power management is done using the Sparkfun Low Power timer (TPL5110), and the logging interval is set by adjusting the switches present on the break out board [Sparkfun TPL5110](https://www.sparkfun.com/products/15353). A parameter file named 'snowlog.csv' is required for the operation of the logger, an example of such a file is shown in the **Parameter File** section. This file must be present on the micro-SD card.
