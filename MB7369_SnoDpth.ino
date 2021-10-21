@@ -1,7 +1,8 @@
 /*
   DESCRIPTION: Arduino code for MaxBotix MB7369 weather resistant ultrasonic distance sensor, and SHT30 temperature / humidity sensor. For use with Adafruit Feather M0 Adalogger and PCF8523 real time clock.
   Power management is done through the Sparkfun TPL5110 low-power breakout, ~logging interval is determined by arranging switches on the TPL5110 chip (https://www.sparkfun.com/products/15353). All communication is
-  I2C, however, MB7369 readings are read via the pulse width output pin.
+  I2C, however, MB7369 readings are read via the pulse width output pin. Daily min / max sensor values are transmitted over the Iridium satallite modem at midnight. A paramter file named 'snowlog.csv' must be present 
+  on the micro-SD card, see (link) for paramter file details.
   AUTHOR:Hunter Gleason
   AGENCY:FLNRORD
   DATE:2021-10-18
@@ -250,12 +251,12 @@ void setup() {
     temps = (float*)cp[3];
     rh = (float*)cp[5];
 
-    //Daily min / max varibles, set to extreams 
-    float min_depth=6000;
-    float max_depth=-1;
+    //Daily min / max varibles, set to limit values 
+    long min_depth=6000;
+    long max_depth=-1;
     float min_temp=100;
     float max_temp=-100;
-    float min_rh=100;
+    float min_rh=101;
     float max_rh=-1;
 
     //For each observation in the CSV 
@@ -308,7 +309,7 @@ void setup() {
     }
 
     //A data string with daily min / max results for sending over Iridium 
-    datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + min_depth + "," + max_depth + "," + min_temp + "," + max_temp + "," + min_rh + "," + max_rh + "}";   
+    datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + "," + String(max_depth) + "," + String(min_temp) + "," + String(max_temp) + "," + String(min_rh) + "," + String(max_rh) + "}";   
 
     //Delete this block, trouble shooting 
     dataFile = SD.open(String(filename[0]), FILE_WRITE);
@@ -325,7 +326,6 @@ void setup() {
     modem.enableSuperCapCharger(false); // Disable the super capacitor charger
     modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
  
-    //digitalWrite(led, LOW); //For trouble shooting
   }
 
 
