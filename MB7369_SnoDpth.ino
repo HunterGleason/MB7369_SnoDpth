@@ -1,7 +1,5 @@
 /* 
-DESCRIPTION: Arduino code for MaxBotix MB7369 weather resistant ultrasonic distance sensor, and SHT31 temperture / humidity sensor. For use with Adafruit Feather M0 Adalogger and PCF8523 real time clock.
-Power managment is done through the Sparkfun TPL5110 low-power breakout, ~logging interval is determined by arranging switches on the TPL5110 chip (https://www.sparkfun.com/products/15353). All communication is
-I2C, however, MB7369 readings are read via the pulse width output pin.
+DESCRIPTION: See https://github.com/HunterGleason/MB7369_SnoDpth/blob/main
 AUTHOR:Hunter Gleason
 AGENCY:FLNRORD
 DATE:2021-10-18
@@ -11,7 +9,8 @@ DATE:2021-10-18
 #include "RTClib.h" //Needed for communication with Real Time Clock
 #include <SPI.h>//Needed for working with SD card
 #include <SD.h>//Needed for working with SD card
-#include "Adafruit_SHT31.h"//Needed for SHT31 Temp/Humid sensor 
+#include "Adafruit_SHT31.h"//Needed for SHT31 Temp/Humid sensor
+#include <CSV_Parser.h>//Needed for parsing CSV data 
 
 /*Create librire instanceses*/
 RTC_PCF8523 rtc; //instantiate PCF8523 RTC
@@ -27,14 +26,14 @@ const byte chipSelect = 4; //Chip select pin for MicroSD breakout
 const byte led = 13; // Pin 13 LED
 
 /*Global constants*/
-const String filename = "SnoDTEST.TXT";//Desired name for logfile !!!must be less than equal to 8 char!!!
-const long N = 6; //Number of sensor readings to average.
+char **filename;//Desired name for logfile !!!must be less than equal to 8 char!!!
+char **N; //Number of sensor readings to average.
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
 long duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
-float temp_c;
-float humid_prct;
+float temp_c; //Variable for holding SHT30 temperture reading
+float humid_prct; //Variable for holding SHT30 humidity reading
 
 //Function for averageing N readings from MaxBotix MB7369 ultrasonic ranger
 long read_sensor(int N) {
@@ -63,7 +62,7 @@ long read_sensor(int N) {
 }
 
 
-//Code runs once upon waking up the TPL5110
+//Code runs once per power on cycle of the TPL5110
 void setup() {
 
   //Set pin modes
@@ -81,11 +80,23 @@ void setup() {
     delay(1000);
   }
 
+
+  //Set paramters for parsing the parameter file
+  CSV_Parser cp(/*format*/ "ss", /*has_header*/ true, /*delimiter*/ ',');
+
+  //Read the parameter file off SD card (snowlog.csv), see README.md 
+  cp.readSDfile("/snowlog.csv");
+
+  //Read values from SNOW_PARAM.TXT into global varibles 
+  filename = (char**)cp["filename"];
+  N = (char**)cp["N"];
+
+
   //Get current logging time from RTC
   DateTime now = rtc.now();
 
   //Read N average ranging distance from MB7369
-  distance = read_sensor(N);
+  distance = read_sensor(String(N[0]).toInt());
 
 
   while (!sht31.begin(0x44)) {  // Start SHT31, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT31 did not initalize)
@@ -109,9 +120,53 @@ void setup() {
   }
 
 
-  //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperture (deg C) and humidity (%)
-  String datastring = String(now.year()) + "-" + String(now.month()) + "-" + String(now.day()) + " " + String(now.hour()) + ":" + String(now.minute()) + ":" + String(now.second()) + "," + String(distance) + ",mm,"+String(temp_c)+",deg C,"+String(humid_prct)+",%";
+  //Format current date time values for writing to SD
+  String yr_str = String(now.year());
+  String mnth_str;
+  if (now.month() >= 10)
+  {
+    mnth_str = String(now.month());
+  } else {
+    mnth_str = "0" + String(now.month());
+  }
 
+  String day_str;
+  if (now.day() >= 10)
+  {
+    day_str = String(now.day());
+  } else {
+    day_str = "0" + String(now.day());
+  }
+
+  String hr_str;
+  if (now.hour() >= 10)
+  {
+    hr_str = String(now.hour());
+  } else {
+    hr_str = "0" + String(now.hour());
+  }
+
+  String min_str;
+  if (now.minute() >= 10)
+  {
+    min_str = String(now.minute());
+  } else {
+    min_str = "0" + String(now.minute());
+  }
+
+
+  String sec_str;
+  if (now.second() >= 10)
+  {
+    sec_str = String(now.second());
+  } else {
+    sec_str = "0" + String(now.second());
+  }
+
+  //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
+  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
+
+    
   //Make sure a SD is available (1/2-sec flash LED means SD card did not initalize)
   while (!SD.begin(chipSelect)) {
     digitalWrite(led, HIGH);
@@ -121,7 +176,7 @@ void setup() {
   }
 
   //Write datastring and close logfile on SD card
-  dataFile = SD.open(filename, FILE_WRITE);
+  dataFile = SD.open(filename[0], FILE_WRITE);
   if (dataFile)
   {
     dataFile.println(datastring);
