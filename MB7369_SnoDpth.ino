@@ -109,32 +109,37 @@ void setup() {
   modem.enable841lowPower(true); // Enable the ATtiny841's low power mode
 
 
-  //Make sure a SD is available (1/2-sec flash LED means SD card did not initialize)
+  //Make sure a SD is available (1-sec flash LED means SD card did not initialize)
   while (!SD.begin(chipSelect))
   {
     digitalWrite(led, HIGH);
-    delay(500);
+    delay(1000);
     digitalWrite(led, LOW);
-    delay(500);
+    delay(1000);
   }
 
   //Set paramters for parsing the parameter file
   CSV_Parser cp(/*format*/ "sss", /*has_header*/ true, /*delimiter*/ ',');
 
-  //Read the parameter file off SD card (snowlog.csv), see README.md 
-  cp.readSDfile("/snowlog.csv");
+  //Read the parameter file off SD card (snowlog.csv), 1/4-sec flash means file is not available  
+  whilte(!cp.readSDfile("/snowlog.csv"){
+    digitalWrite(led,HIGH);
+    delay(250);
+    digitalWrite(led,LOW);
+    delay(250);
+  }
 
   //Read values from SNOW_PARAM.TXT into global varibles 
   filename = (char**)cp["filename"];
   N = (char**)cp["N"];
   logging_intv_min = (char**)cp["log_intv"];
 
-  // Start RTC (1-sec flash LED means RTC did not initialize)
+  // Start RTC (10-sec flash LED means RTC did not initialize)
   while (!rtc.begin()) {
     digitalWrite(led, HIGH);
-    delay(1000);
+    delay(10000);
     digitalWrite(led, LOW);
-    delay(1000);
+    delay(10000);
   }
 
   //Get current logging time from RTC
@@ -211,7 +216,7 @@ void setup() {
   String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
 
   //Write datastring and close logfile on SD card
-  dataFile = SD.open(String(filename[0]), FILE_WRITE);
+  dataFile = SD.open(filename[0], FILE_WRITE);
   if (dataFile)
   {
     dataFile.println(datastring);
@@ -238,26 +243,26 @@ void setup() {
 
     //Varibles for holding data fields 
     char **datetimes;
-    long *snowdepths;
-    float *temps;
-    float *rh;
+    char **snowdepths;
+    char **temps;
+    char **rhs;
 
     //Parse the logfile
     cp.readSDfile(filename[0]);
 
     //Populate data arrays from logfile
     datetimes = (char**)cp[0];
-    snowdepths = (long*)cp[1];
-    temps = (float*)cp[3];
-    rh = (float*)cp[5];
+    snowdepths = (char**)cp[1];
+    temps = (char**)cp[3];
+    rhs = (char**)cp[5];
 
-    //Daily min / max varibles, set to limit values 
-    long min_depth=6000;
-    long max_depth=-1;
-    float min_temp=100;
-    float max_temp=-100;
-    float min_rh=101;
-    float max_rh=-1;
+    //Declare daily min / max varibles, set to limit values 
+    long min_depth=6000;//Max distance is 5000mm
+    long max_depth=-1;//Min distance is 0 mm
+    float min_temp=100;//100 deg C should not be reached in outdoor conditions
+    float max_temp=-100;//-100 deg C should not be reached in outdoor conditions
+    float min_rh=101;//Max RH is 100 %
+    float max_rh=-1;//Min RH is 0 %
 
     //For each observation in the CSV 
     for (int i = 0; i < cp.getRowsCount(); i++) {
@@ -273,35 +278,39 @@ void setup() {
       //Check if the observations datetime occured during the day being summarised  
       if (dt_year == days_start.year() && dt_month == days_start.month() && dt_day == days_start.day())
       {
+        long snowdepth = String(snowdepths[i]).toInt();
+        float temp = String(temps[i]).toFloat();
+        float rh = String(rhs[i]).toFloat(); 
+        
         //Update min snow depth
-        if(snowdepths[i]<min_depth)
+        if(snowdepth<min_depth)
         {
-          min_depth=snowdepths[i];
+          min_depth=snowdepth;
         }
         //Update max snow depth
-        if(snowdepths[i]>max_depth)
+        if(snowdepth>max_depth)
         {
-          max_depth=snowdepths[i];
+          max_depth=snowdepth;
         }
         //Update min temp
-        if(temps[i]<min_temp)
+        if(temp<min_temp)
         {
-          min_temp=temps[i];
+          min_temp=temp;
         }
         //Update max temp
-        if(temps[i]>max_temp)
+        if(temp>max_temp)
         {
-          max_temp=temps[i];
+          max_temp=temp;
         }
         //Update min rh
-        if(rh[i]<min_rh)
+        if(rh<min_rh)
         {
-          min_rh=rh[i];
+          min_rh=rh;
         }
         //Update max rh
-        if(rh[i]>max_rh)
+        if(rh>max_rh)
         {
-          max_rh=rh[i];
+          max_rh=rh;
         }
 
       }
@@ -312,7 +321,7 @@ void setup() {
     datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + "," + String(max_depth) + "," + String(min_temp) + "," + String(max_temp) + "," + String(min_rh) + "," + String(max_rh) + "}";   
 
     //Delete this block, trouble shooting 
-    dataFile = SD.open(String(filename[0]), FILE_WRITE);
+    dataFile = SD.open(filename[0], FILE_WRITE);
     if (dataFile)
     {
       dataFile.println(datastring);
