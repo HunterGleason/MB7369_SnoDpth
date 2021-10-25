@@ -1,7 +1,7 @@
 /*
   DESCRIPTION: Arduino code for MaxBotix MB7369 weather resistant ultrasonic distance sensor, and SHT30 temperature / humidity sensor. For use with Adafruit Feather M0 Adalogger and PCF8523 real time clock.
   Power management is done through the Sparkfun TPL5110 low-power breakout, ~logging interval is determined by arranging switches on the TPL5110 chip (https://www.sparkfun.com/products/15353). All communication is
-  I2C, however, MB7369 readings are read via the pulse width output pin. Daily min / max sensor values are transmitted over the Iridium satallite modem at midnight. A paramter file named 'snowlog.csv' must be present 
+  I2C, however, MB7369 readings are read via the pulse width output pin. Daily min / max sensor values are transmitted over the Iridium satallite modem at midnight. A paramter file named 'snowlog.csv' must be present
   on the micro-SD card, see (link) for paramter file details.
   AUTHOR:Hunter Gleason
   AGENCY:FLNRORD
@@ -40,13 +40,12 @@ const byte led = 13; // Pin 13 LED
 /*Global constants*/
 char **filename;//Desired name for data file !!!must be less than equal to 8 char!!!
 char **N; //Number of ultrasonic reange sensor readings to average.
-char **logging_intv_min;//Should match settings on TPL5110 (i.e., the switch combination), when using Iridium recommended min logging interval of >=5-min do to required transmit time during periods of poor signal quality, otherwise tranmission may fail. 
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
 long duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
-float temp_c; //Variable for holding SHT30 temperature 
-float humid_prct; //Variable for holding SHT30 humidity 
+float temp_c; //Variable for holding SHT30 temperature
+float humid_prct; //Variable for holding SHT30 humidity
 
 //Function for averaging N readings from MaxBotix MB7369 ultrasonic ranger
 long read_sensor(int N) {
@@ -69,9 +68,11 @@ long read_sensor(int N) {
 
     avg_dist = avg_dist + distance;
   }
+
   //Compute the average and return
   avg_dist = avg_dist / N;
   return avg_dist;
+
 }
 
 
@@ -93,7 +94,7 @@ void setup() {
   Wire.begin();
 
   // Check that the Qwiic Iridium is attached (5-sec flash LED means Qwiic Iridium did not initialize)
-  while(!modem.isConnected())
+  while (!modem.isConnected())
   {
     digitalWrite(led, HIGH);
     delay(5000);
@@ -119,23 +120,24 @@ void setup() {
   }
 
   //Set paramters for parsing the parameter file
-  CSV_Parser cp(/*format*/ "sss", /*has_header*/ true, /*delimiter*/ ',');
+  CSV_Parser cp(/*format*/ "ss", /*has_header*/ true, /*delimiter*/ ',');
 
-  //Read the parameter file off SD card (snowlog.csv), 1/4-sec flash means file is not available  
-  whilte(!cp.readSDfile("/snowlog.csv"){
-    digitalWrite(led,HIGH);
+  //Read the parameter file off SD card (snowlog.csv), 1/4-sec flash means file is not available
+  while (!cp.readSDfile("/snowlog.csv"))
+  {
+    digitalWrite(led, HIGH);
     delay(250);
-    digitalWrite(led,LOW);
+    digitalWrite(led, LOW);
     delay(250);
   }
 
-  //Read values from SNOW_PARAM.TXT into global varibles 
+  //Read values from SNOW_PARAM.TXT into global varibles
   filename = (char**)cp["filename"];
   N = (char**)cp["N"];
-  logging_intv_min = (char**)cp["log_intv"];
 
   // Start RTC (10-sec flash LED means RTC did not initialize)
-  while (!rtc.begin()) {
+  while (!rtc.begin())
+  {
     digitalWrite(led, HIGH);
     delay(10000);
     digitalWrite(led, LOW);
@@ -144,12 +146,12 @@ void setup() {
 
   //Get current logging time from RTC
   DateTime now = rtc.now();
-
   //Read N average ranging distance from MB7369
   distance = read_sensor(String(N[0]).toInt());
 
 
-  while (!sht31.begin(0x44)) {  // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT30 did not initialize)
+  while (!sht31.begin(0x44))
+  { // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT30 did not initialize)
     digitalWrite(led, HIGH);
     delay(2000);
     digitalWrite(led, LOW);
@@ -224,123 +226,149 @@ void setup() {
   }
 
   //Check that the iridium modem is connected and the the clock has just reached midnight (i.e.,current time is within one logging interval of midnight)
-  if (now.hour() == 0 && now.minute() <= String(logging_intv_min[0]).toInt() && modem.isConnected())
+  if ((int) now.hour() == 0)
   {
-   
 
-    modem.enableSuperCapCharger(true); // Enable the super capacitor charger
-    while (!modem.checkSuperCapCharger()) ; // Wait for the capacitors to charge
-    modem.enable9603Npower(true); // Enable power for the 9603N
-    modem.begin(); // Wake up the 9603N and prepare it for communications.
+    if (!SD.exists("IRID.CSV"))
+    {
+      dataFile = SD.open("IRID.CSV", FILE_WRITE);
+      dataFile.println("day,day1");
+      dataFile.println(String(now.day())+","+String(now.day()));
+      dataFile.close();
 
-    /*Need to obtain the daily observations from the SD card, caclulate daily min / max for snow depth, temperture and RH, and send results over Iridium*/ 
+    }
+
+
+    CSV_Parser cp(/*format*/ "s-", /*has_header*/ true, /*delimiter*/ ',');
+
     
-    //Get the datetime of the days start (i.e., 24 hours previous to current time)
-    DateTime days_start (now - TimeSpan(1,0,0,0));
+    while (!cp.readSDfile("/IRID.CSV"))
+    {
+      digitalWrite(led, HIGH);
+      delay(500);
+      digitalWrite(led, LOW);
+      delay(500);
+    }
+    
+    char **irid_day = (char**)cp["day"];
 
-    //Set paramters for parsing the log file
-    CSV_Parser cp("ss-s-s-", false, ',');
+    if (String(irid_day[0]).toInt() == (int) now.day())
+    {
 
-    //Varibles for holding data fields 
-    char **datetimes;
-    char **snowdepths;
-    char **temps;
-    char **rhs;
+      modem.enableSuperCapCharger(true); // Enable the super capacitor charger
+      while (!modem.checkSuperCapCharger()) ; // Wait for the capacitors to charge
+      modem.enable9603Npower(true); // Enable power for the 9603N
+      modem.begin(); // Wake up the 9603N and prepare it for communications.
 
-    //Parse the logfile
-    cp.readSDfile(filename[0]);
+      /*Need to obtain the daily observations from the SD card, caclulate daily min / max for snow depth, temperture and RH, and send results over Iridium*/
 
-    //Populate data arrays from logfile
-    datetimes = (char**)cp[0];
-    snowdepths = (char**)cp[1];
-    temps = (char**)cp[3];
-    rhs = (char**)cp[5];
+      //Get the datetime of the days start (i.e., 24 hours previous to current time)
+      DateTime days_start (now - TimeSpan(1, 0, 0, 0));
 
-    //Declare daily min / max varibles, set to limit values 
-    long min_depth=6000;//Max distance is 5000mm
-    long max_depth=-1;//Min distance is 0 mm
-    float min_temp=100;//100 deg C should not be reached in outdoor conditions
-    float max_temp=-100;//-100 deg C should not be reached in outdoor conditions
-    float min_rh=101;//Max RH is 100 %
-    float max_rh=-1;//Min RH is 0 %
+      //Set paramters for parsing the log file
+      CSV_Parser cp("ss-s-s-", false, ',');
 
-    //For each observation in the CSV 
-    for (int i = 0; i < cp.getRowsCount(); i++) {
+      //Varibles for holding data fields
+      char **datetimes;
+      char **snowdepths;
+      char **temps;
+      char **rhs;
 
-      //Get the datetime stamp as string 
-      String datetime = String(datetimes[i]);
+      //Parse the logfile
+      cp.readSDfile(filename[0]);
 
-      //Get the observations year, month, day
-      int dt_year = datetime.substring(0, 4).toInt();
-      int dt_month = datetime.substring(5, 7).toInt();
-      int dt_day = datetime.substring(8, 10).toInt();
+      //Populate data arrays from logfile
+      datetimes = (char**)cp[0];
+      snowdepths = (char**)cp[1];
+      temps = (char**)cp[3];
+      rhs = (char**)cp[5];
 
-      //Check if the observations datetime occured during the day being summarised  
-      if (dt_year == days_start.year() && dt_month == days_start.month() && dt_day == days_start.day())
-      {
-        long snowdepth = String(snowdepths[i]).toInt();
-        float temp = String(temps[i]).toFloat();
-        float rh = String(rhs[i]).toFloat(); 
-        
-        //Update min snow depth
-        if(snowdepth<min_depth)
+      //Declare daily min / max varibles, set to limit values
+      long min_depth = 6000; //Max distance is 5000mm
+      long max_depth = -1; //Min distance is 0 mm
+      float min_temp = 100; //100 deg C should not be reached in outdoor conditions
+      float max_temp = -100; //-100 deg C should not be reached in outdoor conditions
+      float min_rh = 101; //Max RH is 100 %
+      float max_rh = -1; //Min RH is 0 %
+
+      //For each observation in the CSV
+      for (int i = 0; i < cp.getRowsCount(); i++) {
+
+        //Get the datetime stamp as string
+        String datetime = String(datetimes[i]);
+
+        //Get the observations year, month, day
+        int dt_year = datetime.substring(0, 4).toInt();
+        int dt_month = datetime.substring(5, 7).toInt();
+        int dt_day = datetime.substring(8, 10).toInt();
+
+        //Check if the observations datetime occured during the day being summarised
+        if (dt_year == days_start.year() && dt_month == days_start.month() && dt_day == days_start.day())
         {
-          min_depth=snowdepth;
-        }
-        //Update max snow depth
-        if(snowdepth>max_depth)
-        {
-          max_depth=snowdepth;
-        }
-        //Update min temp
-        if(temp<min_temp)
-        {
-          min_temp=temp;
-        }
-        //Update max temp
-        if(temp>max_temp)
-        {
-          max_temp=temp;
-        }
-        //Update min rh
-        if(rh<min_rh)
-        {
-          min_rh=rh;
-        }
-        //Update max rh
-        if(rh>max_rh)
-        {
-          max_rh=rh;
+          long snowdepth = String(snowdepths[i]).toInt();
+          float temp = String(temps[i]).toFloat();
+          float rh = String(rhs[i]).toFloat();
+
+          //Update min snow depth
+          if (snowdepth < min_depth)
+          {
+            min_depth = snowdepth;
+          }
+          //Update max snow depth
+          if (snowdepth > max_depth)
+          {
+            max_depth = snowdepth;
+          }
+          //Update min temp
+          if (temp < min_temp)
+          {
+            min_temp = temp;
+          }
+          //Update max temp
+          if (temp > max_temp)
+          {
+            max_temp = temp;
+          }
+          //Update min rh
+          if (rh < min_rh)
+          {
+            min_rh = rh;
+          }
+          //Update max rh
+          if (rh > max_rh)
+          {
+            max_rh = rh;
+          }
+
         }
 
       }
 
-    }
+      //A data string with daily min / max results for sending over Iridium
+      datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + "," + String(max_depth) + "," + String(min_temp) + "," + String(max_temp) + "," + String(min_rh) + "," + String(max_rh) + "}";
 
-    //A data string with daily min / max results for sending over Iridium 
-    datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + "," + String(max_depth) + "," + String(min_temp) + "," + String(max_temp) + "," + String(min_rh) + "," + String(max_rh) + "}";   
 
-    //Delete this block, trouble shooting 
-    dataFile = SD.open(filename[0], FILE_WRITE);
-    if (dataFile)
-    {
-      dataFile.println(datastring);
+      modem.sendSBDText(datastring.c_str()); // Send a message
+      modem.sleep(); // Put the modem to sleep
+      modem.enable9603Npower(false); // Disable power for the 9603N
+      modem.enableSuperCapCharger(false); // Disable the super capacitor charger
+      modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
+
+
+      SD.remove("IRID.CSV");
+
+      dataFile = SD.open("IRID.CSV", FILE_WRITE);
+      dataFile.println("day,day1");
+      DateTime next_day = (DateTime(now.year(),now.month(),now.day()) + TimeSpan(1,0,0,0));
+      dataFile.println(String(next_day.day())+","+String(next_day.day()));
       dataFile.close();
+
     }
-
-    
-    modem.sendSBDText(datastring.c_str()); // Send a message
-    modem.sleep(); // Put the modem to sleep
-    modem.enable9603Npower(false); // Disable power for the 9603N
-    modem.enableSuperCapCharger(false); // Disable the super capacitor charger
-    modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
- 
   }
-
-
 }
 
-void loop() {
+void loop()
+{
 
 
   // We're done!
