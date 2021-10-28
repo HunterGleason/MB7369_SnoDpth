@@ -215,7 +215,19 @@ void setup() {
   }
 
   //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
-  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
+  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + "," + String(temp_c) + "," + String(humid_prct);
+
+  //Write header if first time writing to the file 
+  if(!SD.exists(filename[0]))
+  {
+    dataFile = SD.open(filename[0], FILE_WRITE);
+    if (dataFile)
+    {
+      dataFile.println("datetime,distance_mm,temp_deg_c,rh_prct");
+      dataFile.close();
+    }
+
+  }
 
   //Write datastring and close logfile on SD card
   dataFile = SD.open(filename[0], FILE_WRITE);
@@ -266,7 +278,7 @@ void setup() {
       DateTime days_start (now - TimeSpan(1, 0, 0, 0));
 
       //Set paramters for parsing the log file
-      CSV_Parser cp("ss-s-s-", false, ',');
+      CSV_Parser cp("ssss", true, ',');
 
       //Varibles for holding data fields
       char **datetimes;
@@ -278,10 +290,10 @@ void setup() {
       cp.readSDfile(filename[0]);
 
       //Populate data arrays from logfile
-      datetimes = (char**)cp[0];
-      snowdepths = (char**)cp[1];
-      temps = (char**)cp[3];
-      rhs = (char**)cp[5];
+      datetimes = (char**)cp["datetime"];
+      snowdepths = (char**)cp["distance_mm"];
+      temps = (char**)cp["temp_deg_c"];
+      rhs = (char**)cp["rh_prct"];
 
       //Declare daily min / max varibles, set to limit values
       long min_depth = 6000; //Max distance is 5000mm
@@ -345,7 +357,7 @@ void setup() {
       }
 
       //A data string with daily min / max results for sending over Iridium
-      datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + "," + String(max_depth) + "," + String(min_temp) + "," + String(max_temp) + "," + String(min_rh) + "," + String(max_rh) + "}";
+      datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + ",min_dist_mm," + String(max_depth) + ",max_dist_mm," + String(min_temp) + ",min_temp_degC," + String(max_temp) + ",max_temp_degC," + String(min_rh) + ",min_rh_prct," + String(max_rh) + ",max_rh_prct}";
 
 
       modem.sendSBDText(datastring.c_str()); // Send a message
