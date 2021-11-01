@@ -1,0 +1,48 @@
+Logger:
+	1) Screw driver (for terminal blocks)
+	2) Micro-USB to USB cable (for programming Adalogger M0)
+	3) Micro-SD card (for logging data to)
+	4) Micro-SD card adapter (for reading data of Micro-SD to laptop)
+	5) Laptop with git-repo, Arduino IDE and dependencies, and recommended RTC Iridium scripts installed
+
+Mount:
+	1) Vertical mast
+	2) Cross-arm post 
+	3) Cross-arm support assembly and required hardware
+	4) Ultrasonic elbow mount and adapter
+	5) Guide wires, with mast mount and turn buckles 
+	6) Solar panel pipe-clamp mount assembly 
+	7) Logger box mount assembly and required hardware 
+	8) Mast ground plate
+	9) Ground stakes
+	10) Addition supporting angle iron (optional)
+	11) SHT31 mounting hardware and radiation shield 
+	12) Cable conduit
+
+Tools & Equipment:
+	1) Screw driver with various bits
+	2) Pliers
+	3) Metric socket set 
+	4) Sledge hammer
+	5) Shovel
+	6) Tin snips
+	7) Hack saw 
+	8) Pen, pencil & notebook
+	9) Duct and electrical tape
+	10) Zip ties 
+	11) Knife 
+	12) Wire strips
+	13) Multimeter 
+	14) Camera 
+
+Spares:
+	1) Pipe clamps
+	2) 22 gauge wire
+	3) U-bolts
+	4) Solar panel?
+	5) MB7369 ultrasonic?
+	6) Iridium antenna?
+	7) Iridium modem?
+	8) SHT30? 
+	7) Heat shrink and lighter 
+
