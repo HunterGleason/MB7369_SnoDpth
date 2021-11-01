@@ -162,7 +162,7 @@ void setup() {
   if (humid_prct >= 80)
   {
     sht31.heater(true);
-    //Give some time for heater to warm up
+    //Give some time for heater to warm up (no documentation on required time, 5 sec adaquate?)
     delay(5000);
     humid_prct = sht31.readHumidity();
     sht31.heater(false);
@@ -356,16 +356,15 @@ void setup() {
       //A data string with daily min / max results for sending over Iridium
       datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + ":min_dist_mm," + String(max_depth) + ":max_dist_mm," + String(min_temp) + ":min_temp_degC," + String(max_temp) + ":max_temp_degC," + String(min_rh) + ":min_rh_prct," + String(max_rh) + ":max_rh_prct}";
 
-
-      modem.sendSBDText(datastring.c_str()); // Send a message
+      modem.sendSBDText(datastring.c_str()); // Send datastring message
       modem.sleep(); // Put the modem to sleep
       modem.enable9603Npower(false); // Disable power for the 9603N
       modem.enableSuperCapCharger(false); // Disable the super capacitor charger
       modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
 
 
+      //Update IRID.CSV with new day
       SD.remove("IRID.CSV");
-
       dataFile = SD.open("IRID.CSV", FILE_WRITE);
       dataFile.println("day,day1");
       DateTime next_day = (DateTime(now.year(),now.month(),now.day()) + TimeSpan(1,0,0,0));
