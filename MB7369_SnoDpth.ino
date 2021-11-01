@@ -1,8 +1,5 @@
 /*
-  DESCRIPTION: Arduino code for MaxBotix MB7369 weather resistant ultrasonic distance sensor, and SHT30 temperature / humidity sensor. For use with Adafruit Feather M0 Adalogger and PCF8523 real time clock.
-  Power management is done through the Sparkfun TPL5110 low-power breakout, ~logging interval is determined by arranging switches on the TPL5110 chip (https://www.sparkfun.com/products/15353). All communication is
-  I2C, however, MB7369 readings are read via the pulse width output pin. Daily min / max sensor values are transmitted over the Iridium satallite modem at midnight. A paramter file named 'snowlog.csv' must be present
-  on the micro-SD card, see (link) for paramter file details.
+  DESCRIPTION:See https://github.com/HunterGleason/MB7369_SnoDpth/tree/wth_iridium
   AUTHOR:Hunter Gleason
   AGENCY:FLNRORD
   DATE:2021-10-18
@@ -357,7 +354,7 @@ void setup() {
       }
 
       //A data string with daily min / max results for sending over Iridium
-      datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + ",min_dist_mm," + String(max_depth) + ",max_dist_mm," + String(min_temp) + ",min_temp_degC," + String(max_temp) + ",max_temp_degC," + String(min_rh) + ",min_rh_prct," + String(max_rh) + ",max_rh_prct}";
+      datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + ":min_dist_mm," + String(max_depth) + ":max_dist_mm," + String(min_temp) + ":min_temp_degC," + String(max_temp) + ":max_temp_degC," + String(min_rh) + ":min_rh_prct," + String(max_rh) + ":max_rh_prct}";
 
 
       modem.sendSBDText(datastring.c_str()); // Send a message
