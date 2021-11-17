@@ -43,3 +43,14 @@ This code utilizes the MCUs built in LED (assumed to be Pin 13) to communicate e
 - 1-sec interval -> The SD card was unable to initialize, or is not present 
 - 1/4-sec interval -> The snowlog.csv parameter file is not present or cannot be opened
 - 2-sec interval -> The SHT30 sensor was unable to initialize
+
+# MB7369 Wire Reference 
+
+A wire-to-pin refrence is provided below for quick connection in the field:
+
+	1) White (D12) to PIN2 (Pulse Width Out)
+	2) Green (11) to PIN4 (Range Start/Stop)
+	3) Red (3.3V) to PIN6 (V+)
+	4) Black (GND) to PIN7 (GND)
+
+

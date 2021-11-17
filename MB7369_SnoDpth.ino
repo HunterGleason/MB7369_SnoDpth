@@ -37,7 +37,7 @@ const byte led = 13; // Pin 13 LED
 /*Global constants*/
 char **filename;//Desired name for data file !!!must be less than equal to 8 char!!!
 char **N; //Number of ultrasonic reange sensor readings to average.
-char **sensor_height_mm;
+char **sensor_height_mm; //Height of ultrasonic sensor above ground in mm
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
@@ -368,7 +368,7 @@ void setup() {
       }
 
       //A data string with daily min / max results for sending over Iridium
-      datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + ":min_dist_mm," + String(max_depth) + ":max_dist_mm," + String(min_temp) + ":min_temp_degC," + String(max_temp) + ":max_temp_degC," + String(min_rh) + ":min_rh_prct," + String(max_rh) + ":max_rh_prct}";
+      datastring = "{" + yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(min_depth) + ":min_depth_mm," + String(max_depth) + ":max_depth_mm," + String(min_temp) + ":min_temp_degC," + String(max_temp) + ":max_temp_degC," + String(min_rh) + ":min_rh_prct," + String(max_rh) + ":max_rh_prct}";
 
       modem.sendSBDText(datastring.c_str()); // Send datastring message
       modem.sleep(); // Put the modem to sleep
