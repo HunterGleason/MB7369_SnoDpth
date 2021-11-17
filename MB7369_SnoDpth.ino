@@ -37,9 +37,11 @@ const byte led = 13; // Pin 13 LED
 /*Global constants*/
 char **filename;//Desired name for data file !!!must be less than equal to 8 char!!!
 char **N; //Number of ultrasonic reange sensor readings to average.
+char **sensor_height_mm;
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
+long depth; //Variable for holding snow depth computed from distance (i.e., sensor height - distance) 
 long duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
 float temp_c; //Variable for holding SHT30 temperature
 float humid_prct; //Variable for holding SHT30 humidity
@@ -117,7 +119,7 @@ void setup() {
   }
 
   //Set paramters for parsing the parameter file
-  CSV_Parser cp(/*format*/ "ss", /*has_header*/ true, /*delimiter*/ ',');
+  CSV_Parser cp(/*format*/ "sss", /*has_header*/ true, /*delimiter*/ ',');
 
   //Read the parameter file off SD card (snowlog.csv), 1/4-sec flash means file is not available
   while (!cp.readSDfile("/snowlog.csv"))
@@ -131,6 +133,7 @@ void setup() {
   //Read values from SNOW_PARAM.TXT into global varibles
   filename = (char**)cp["filename"];
   N = (char**)cp["N"];
+  sensor_height_mm = (char**)cp["sensor_height_mm"];
 
   // Start RTC (10-sec flash LED means RTC did not initialize)
   while (!rtc.begin())
@@ -145,6 +148,8 @@ void setup() {
   DateTime now = rtc.now();
   //Read N average ranging distance from MB7369
   distance = read_sensor(String(N[0]).toInt());
+  depth = String(sensor_height_mm[0]).toInt() - distance;
+  
 
 
   while (!sht31.begin(0x44))
@@ -162,8 +167,8 @@ void setup() {
   if (humid_prct >= 80)
   {
     sht31.heater(true);
-    //Give some time for heater to warm up (no documentation on required time, 5 sec adaquate?)
-    delay(5000);
+    //Give some time for heater to warm up (no documentation on required time, 1 sec adaquate?)
+    delay(1000);
     humid_prct = sht31.readHumidity();
     sht31.heater(false);
   }
@@ -212,7 +217,7 @@ void setup() {
   }
 
   //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
-  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + "," + String(temp_c) + "," + String(humid_prct);
+  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + "," + String(depth) +"," + String(temp_c) + "," + String(humid_prct);
 
   //Write header if first time writing to the file 
   if(!SD.exists(filename[0]))
@@ -220,7 +225,7 @@ void setup() {
     dataFile = SD.open(filename[0], FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println("datetime,distance_mm,temp_deg_c,rh_prct");
+      dataFile.println("datetime,distance_mm,depth_mm,temp_deg_c,rh_prct");
       dataFile.close();
     }
 
@@ -264,6 +269,15 @@ void setup() {
     if (String(irid_day[0]).toInt() == (int) now.day())
     {
 
+      //Update IRID.CSV with new day
+      SD.remove("IRID.CSV");
+      dataFile = SD.open("IRID.CSV", FILE_WRITE);
+      dataFile.println("day,day1");
+      DateTime next_day = (DateTime(now.year(),now.month(),now.day()) + TimeSpan(1,0,0,0));
+      dataFile.println(String(next_day.day())+","+String(next_day.day()));
+      dataFile.close();
+      
+      
       modem.enableSuperCapCharger(true); // Enable the super capacitor charger
       while (!modem.checkSuperCapCharger()) ; // Wait for the capacitors to charge
       modem.enable9603Npower(true); // Enable power for the 9603N
@@ -275,7 +289,7 @@ void setup() {
       DateTime days_start (now - TimeSpan(1, 0, 0, 0));
 
       //Set paramters for parsing the log file
-      CSV_Parser cp("ssss", true, ',');
+      CSV_Parser cp("s-sss", true, ',');
 
       //Varibles for holding data fields
       char **datetimes;
@@ -288,7 +302,7 @@ void setup() {
 
       //Populate data arrays from logfile
       datetimes = (char**)cp["datetime"];
-      snowdepths = (char**)cp["distance_mm"];
+      snowdepths = (char**)cp["depth_mm"];
       temps = (char**)cp["temp_deg_c"];
       rhs = (char**)cp["rh_prct"];
 
@@ -361,15 +375,6 @@ void setup() {
       modem.enable9603Npower(false); // Disable power for the 9603N
       modem.enableSuperCapCharger(false); // Disable the super capacitor charger
       modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
-
-
-      //Update IRID.CSV with new day
-      SD.remove("IRID.CSV");
-      dataFile = SD.open("IRID.CSV", FILE_WRITE);
-      dataFile.println("day,day1");
-      DateTime next_day = (DateTime(now.year(),now.month(),now.day()) + TimeSpan(1,0,0,0));
-      dataFile.println(String(next_day.day())+","+String(next_day.day()));
-      dataFile.close();
 
     }
   }

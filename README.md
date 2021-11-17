@@ -28,10 +28,10 @@ See [schematic](https://github.com/HunterGleason/MB7369_SnoDpth/blob/wth_iridium
 # Parameter File
 An example of the 'snowlog.csv' is shown below, this file must be saved to the micro-SD before using this script:
 
-filename,N<br/>
-snowtest.csv,6
+filename,N,sensor_height_mm<br/>
+snowtest.csv,6,4500
 
-There are two columns that must be present, delimited by commas. The first column named *filename* is the desired name for the data log file, **and must be less than or equal to 8 characters, containing only letters and numbers!** The second column *N* is the number of samples to average when taking distance readings from the MaxBotix MB7369 ultrasonic sensor.  
+There are three columns that must be present, delimited by commas. The first column named *filename* is the desired name for the data log file, **and must be less than or equal to 8 characters, containing only letters and numbers!** The second column *N* is the number of samples to average when taking distance readings from the MaxBotix MB7369 ultrasonic sensor, the final column *sensor_height_mm* is the height of the MaxBotix ultrasonic sensor from the ground in mm (see MB7369 User Manual), and is required for computing the depth of snow (or whatever).  
 
 # Error Codes
 
