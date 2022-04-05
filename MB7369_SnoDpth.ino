@@ -13,11 +13,13 @@
 #include <IridiumSBD.h>
 #include <Wire.h>
 #include <CSV_Parser.h>//Needed for parsing CSV data 
+#include "QuickStats.h"
 
 /*Create library instances*/
 RTC_PCF8523 rtc; //instantiate PCF8523 RTC
 File dataFile;//instantiate a logging file
 Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT30 sensor
+QuickStats stats; //initialize an instance of stats
 
 #define IridiumWire Wire
 
@@ -26,7 +28,7 @@ IridiumSBD modem(IridiumWire);
 
 
 /*Define pinouts*/
-const byte pulsePin = 12; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
+const byte depthAlgPin = 1; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
 const byte triggerPin = 11; //Range start / stop pin for MaxBotix MB7369 ultrasonic ranger
 const byte donePin = 10; //Done pin for TPL5110 power breakout
 const byte chipSelect = 4; //Chip select pin for MicroSD breakout
@@ -40,54 +42,34 @@ char **N; //Number of ultrasonic reange sensor readings to average.
 char **sensor_height_mm; //Height of ultrasonic sensor above ground in mm
 
 /*Global variables*/
-long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
-long depth; //Variable for holding snow depth computed from distance (i.e., sensor height - distance) 
-long duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
+float distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
+float med_dist;//Variable for holding median distance read from MaxBotix MB7369 ultrasonic ranger
+float depth; //Variable for holding snow depth computed from distance (i.e., sensor height - distance)
 float temp_c; //Variable for holding SHT30 temperature
 float humid_prct; //Variable for holding SHT30 humidity
 
 //Function for averaging N readings from MaxBotix MB7369 ultrasonic ranger
-long read_sensor(int N) {
-
-  //Variable for average distance
-  long avg_dist = 0;
-
-  //Take N readings
-  for (int i = 0; i < N; i++)
-  {
-    //Start ranging
-    digitalWrite(triggerPin, HIGH);
-    delayMicroseconds(30);
-    //Get the pulse duration (TOF)
-    duration = pulseIn(pulsePin, HIGH);
-    //Stop ranging
-    digitalWrite(triggerPin, LOW);
-    //Distance = Duration for MB7369 (mm)
-    distance = duration;
-
-    avg_dist = avg_dist + distance;
-  }
-
-  //Compute the average and return
-  avg_dist = avg_dist / N;
-  return avg_dist;
-
+void read_sensor() {
+  distance = analogRead(depthAlgPin) * (1.0 / (3300.0 / 5120.0)) * (3300.0 / 4096.0);
 }
 
 
 //Code runs once upon waking up the TPL5110
 void setup() {
 
+  //Set analog resolution to 12-bit (4096 counts)
+  analogReadResolution(12);
+
   //Set pin modes
 
   //turn off built in LED
   pinMode(led, OUTPUT);
   digitalWrite(led, LOW);
-
-  pinMode(pulsePin, INPUT);
-  pinMode(triggerPin, OUTPUT);
-  digitalWrite(triggerPin, LOW);
+  pinMode(depthAlgPin, INPUT);
+  //pinMode(triggerPin, OUTPUT);
+  //digitalWrite(triggerPin, HIGH);
   pinMode(donePin, OUTPUT);
+
 
   // Start the I2C wire port connected to the satellite modem
   Wire.begin();
@@ -103,10 +85,10 @@ void setup() {
 
   // For USB "low current" applications
   modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
-  modem.sleep(); // Put the modem to sleep
   modem.enable9603Npower(false); // Disable power for the 9603N
   modem.enableSuperCapCharger(false); // Disable the super capacitor charger
   modem.enable841lowPower(true); // Enable the ATtiny841's low power mode
+  modem.sleep(); // Put the modem to sleep
 
 
   //Make sure a SD is available (1-sec flash LED means SD card did not initialize)
@@ -144,12 +126,30 @@ void setup() {
     delay(10000);
   }
 
+  delay(100);
   //Get current logging time from RTC
   DateTime now = rtc.now();
+
   //Read N average ranging distance from MB7369
-  distance = read_sensor(String(N[0]).toInt());
-  depth = String(sensor_height_mm[0]).toInt() - distance;
-  
+  int n = String(N[0]).toInt();
+  float samples[n];
+  int i = 0;
+
+  float sensor_height = String(sensor_height_mm[0]).toFloat();
+  while (i < n)
+  {
+    read_sensor();
+
+    samples[i] = distance;
+    i++;
+
+    delay(500);
+  }
+
+  med_dist = stats.median(samples, n);
+
+  depth = sensor_height - med_dist;
+
 
 
   while (!sht31.begin(0x44))
@@ -217,10 +217,10 @@ void setup() {
   }
 
   //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
-  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + "," + String(depth) +"," + String(temp_c) + "," + String(humid_prct);
+  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + "," + String(depth) + "," + String(temp_c) + "," + String(humid_prct);
 
-  //Write header if first time writing to the file 
-  if(!SD.exists(filename[0]))
+  //Write header if first time writing to the file
+  if (!SD.exists(filename[0]))
   {
     dataFile = SD.open(filename[0], FILE_WRITE);
     if (dataFile)
@@ -247,7 +247,7 @@ void setup() {
     {
       dataFile = SD.open("IRID.CSV", FILE_WRITE);
       dataFile.println("day,day1");
-      dataFile.println(String(now.day())+","+String(now.day()));
+      dataFile.println(String(now.day()) + "," + String(now.day()));
       dataFile.close();
 
     }
@@ -255,7 +255,7 @@ void setup() {
 
     CSV_Parser cp(/*format*/ "s-", /*has_header*/ true, /*delimiter*/ ',');
 
-    
+
     while (!cp.readSDfile("/IRID.CSV"))
     {
       digitalWrite(led, HIGH);
@@ -263,7 +263,7 @@ void setup() {
       digitalWrite(led, LOW);
       delay(500);
     }
-    
+
     char **irid_day = (char**)cp["day"];
 
     if (String(irid_day[0]).toInt() == (int) now.day())
@@ -273,11 +273,11 @@ void setup() {
       SD.remove("IRID.CSV");
       dataFile = SD.open("IRID.CSV", FILE_WRITE);
       dataFile.println("day,day1");
-      DateTime next_day = (DateTime(now.year(),now.month(),now.day()) + TimeSpan(1,0,0,0));
-      dataFile.println(String(next_day.day())+","+String(next_day.day()));
+      DateTime next_day = (DateTime(now.year(), now.month(), now.day()) + TimeSpan(1, 0, 0, 0));
+      dataFile.println(String(next_day.day()) + "," + String(next_day.day()));
       dataFile.close();
-      
-      
+
+
       modem.enableSuperCapCharger(true); // Enable the super capacitor charger
       while (!modem.checkSuperCapCharger()) ; // Wait for the capacitors to charge
       modem.enable9603Npower(true); // Enable power for the 9603N
@@ -389,6 +389,7 @@ void loop()
   // from low to HIGH is how the TPL5110 Nano Power Timer knows to turn off the
   // microcontroller.
   digitalWrite(donePin, LOW);
+  delay(10);
   digitalWrite(donePin, HIGH);
   delay(10);
 
