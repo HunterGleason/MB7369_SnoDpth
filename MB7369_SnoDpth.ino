@@ -2,7 +2,7 @@
   DESCRIPTION:See https://github.com/HunterGleason/MB7369_SnoDpth/tree/wth_iridium
   AUTHOR:Hunter Gleason
   AGENCY:FLNRORD
-  DATE:2021-10-18
+  DATE:2022-04-06
 */
 
 /*Required libraries*/
@@ -28,8 +28,8 @@ IridiumSBD modem(IridiumWire);
 
 
 /*Define pinouts*/
-const byte depthAlgPin = 1; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
-const byte triggerPin = 11; //Range start / stop pin for MaxBotix MB7369 ultrasonic ranger
+const byte pwPin = 9; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
+const byte rangePin = 12; //Range start / stop pin for MaxBotix MB7369 ultrasonic ranger
 const byte donePin = 10; //Done pin for TPL5110 power breakout
 const byte chipSelect = 4; //Chip select pin for MicroSD breakout
 const byte led = 13; // Pin 13 LED
@@ -42,32 +42,33 @@ char **N; //Number of ultrasonic reange sensor readings to average.
 char **sensor_height_mm; //Height of ultrasonic sensor above ground in mm
 
 /*Global variables*/
-float distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
+float distance; //Variable for holding sample distance read from MaxBotix MB7369 ultrasonic ranger
 float med_dist;//Variable for holding median distance read from MaxBotix MB7369 ultrasonic ranger
 float depth; //Variable for holding snow depth computed from distance (i.e., sensor height - distance)
 float temp_c; //Variable for holding SHT30 temperature
 float humid_prct; //Variable for holding SHT30 humidity
 
-//Function for averaging N readings from MaxBotix MB7369 ultrasonic ranger
-void read_sensor() {
-  distance = analogRead(depthAlgPin) * (1.0 / (3300.0 / 5120.0)) * (3300.0 / 4096.0);
+//Function for reading MaxBotix MB7369 ultrasonic ranger using pulse width method
+void read_sensor(){
+  digitalWrite(rangePin,HIGH);
+  delayMicroseconds(50); 
+  distance = pulseIn(pwPin, HIGH);
+  digitalWrite(rangePin,LOW);
 }
 
 
 //Code runs once upon waking up the TPL5110
 void setup() {
 
-  //Set analog resolution to 12-bit (4096 counts)
-  analogReadResolution(12);
 
   //Set pin modes
 
   //turn off built in LED
   pinMode(led, OUTPUT);
   digitalWrite(led, LOW);
-  pinMode(depthAlgPin, INPUT);
-  //pinMode(triggerPin, OUTPUT);
-  //digitalWrite(triggerPin, HIGH);
+  pinMode(pwPin, INPUT);
+  pinMode(rangePin, OUTPUT);
+  digitalWrite(rangePin, LOW);
   pinMode(donePin, OUTPUT);
 
 
@@ -78,9 +79,9 @@ void setup() {
   while (!modem.isConnected())
   {
     digitalWrite(led, HIGH);
-    delay(5000);
+    delay(10000);
     digitalWrite(led, LOW);
-    delay(5000);
+    delay(10000);
   }
 
   // For USB "low current" applications
@@ -95,9 +96,9 @@ void setup() {
   while (!SD.begin(chipSelect))
   {
     digitalWrite(led, HIGH);
-    delay(1000);
+    delay(5000);
     digitalWrite(led, LOW);
-    delay(1000);
+    delay(5000);
   }
 
   //Set paramters for parsing the parameter file
@@ -107,26 +108,27 @@ void setup() {
   while (!cp.readSDfile("/snowlog.csv"))
   {
     digitalWrite(led, HIGH);
-    delay(250);
+    delay(2000);
     digitalWrite(led, LOW);
-    delay(250);
+    delay(2000);
   }
 
-  //Read values from SNOW_PARAM.TXT into global varibles
+  //Read values from snowlog.csv into global varibles
   filename = (char**)cp["filename"];
   N = (char**)cp["N"];
+  
+  //Get the sensor height from snowlog.csv
   sensor_height_mm = (char**)cp["sensor_height_mm"];
 
   // Start RTC (10-sec flash LED means RTC did not initialize)
   while (!rtc.begin())
   {
     digitalWrite(led, HIGH);
-    delay(10000);
+    delay(1000);
     digitalWrite(led, LOW);
-    delay(10000);
+    delay(1000);
   }
 
-  delay(100);
   //Get current logging time from RTC
   DateTime now = rtc.now();
 
@@ -155,9 +157,9 @@ void setup() {
   while (!sht31.begin(0x44))
   { // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT30 did not initialize)
     digitalWrite(led, HIGH);
-    delay(2000);
+    delay(500);
     digitalWrite(led, LOW);
-    delay(2000);
+    delay(500);
   }
 
   temp_c = sht31.readTemperature();
@@ -167,8 +169,8 @@ void setup() {
   if (humid_prct >= 80)
   {
     sht31.heater(true);
-    //Give some time for heater to warm up (no documentation on required time, 1 sec adaquate?)
-    delay(1000);
+    //Give some time for heater to warm up (no documentation on required time, 2 sec adaquate?)
+    delay(3000);
     humid_prct = sht31.readHumidity();
     sht31.heater(false);
   }
@@ -259,9 +261,9 @@ void setup() {
     while (!cp.readSDfile("/IRID.CSV"))
     {
       digitalWrite(led, HIGH);
-      delay(500);
+      delay(100);
       digitalWrite(led, LOW);
-      delay(500);
+      delay(100);
     }
 
     char **irid_day = (char**)cp["day"];
