@@ -34,9 +34,10 @@ const byte led = 13; // Pin 13 LED
 
 /*Global constants*/
 char **filename;//Desired name for data file !!!must be less than equal to 8 char!!!
-char **N; //Number of ultrasonic reange sensor readings to average.
-char **logging_intv_min;//Should match settings on TPL5110 (i.e., the switch combination), when using Iridium recommended min logging interval of >=5-min do to required transmit time during periods of poor signal quality, otherwise tranmission may fail. 
-
+int16_t *N; //Number of ultrasonic reange sensor readings to average.
+int16_t *irid_freq; // Iridium transmit freqency in hours (Read from PARAM.txt)
+char **start_time;// Time at which first Iridum transmission should occur (Read from PARAM.txt)
+char **irid_time;// For reading timestamp from IRID.CSV
 
 /*Global variables*/
 long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
@@ -68,6 +69,196 @@ long read_sensor(int N) {
   //Compute the average and return
   avg_dist = avg_dist / N;
   return avg_dist;
+}
+
+/*Function reads data from a .csv logfile, and uses Iridium modem to send all observations
+   since the previous transmission over satellite at midnight on the RTC.
+*/
+int send_hourly_data()
+{
+
+  // For capturing Iridium errors
+  int err;
+
+
+  // Prevent from trying to charge to quickly, low current setup
+  modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
+  modem.enable9603Npower(true); // Enable power for the 9603N
+  modem.enableSuperCapCharger(true); // Enable the super capacitor charger
+
+  // Begin satellite modem operation, blink LED (1-sec) if there was an issue
+  err = modem.begin();
+  if (err != ISBD_SUCCESS)
+  {
+    digitalWrite(LED, HIGH);
+    delay(1000);
+    digitalWrite(LED, LOW);
+    delay(1000);
+    digitalWrite(LED, HIGH);
+    delay(1000);
+    digitalWrite(LED, LOW);
+    delay(1000);
+  }
+
+  // Set paramters for parsing the log file
+  CSV_Parser cp("sdff", true, ',');
+
+  // Varibles for holding data fields
+  char **datetimes;
+  int16_t *snow_depths;
+  float *air_temps;
+  float *rhs;
+
+  // Read HOURLY.CSV file
+  cp.readSDfile("/HOURLY.CSV");
+
+
+  //Populate data arrays from logfile
+  datetimes = (char**)cp["datetime"];
+  snow_depths = (int16_t*)cp["snow_depth_mm"];
+  air_temps = (float*)cp["air_temp_deg_c"];
+  rhs = (float*)cp["rh_prct"];
+
+  //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
+  String datastring = "EFG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
+
+
+  //For each hour 0-23
+  for (int day_hour = 0; day_hour < 24; day_hour++)
+  {
+
+    //Declare average vars for each HYDROS21 output
+    float mean_depth;
+    float mean_temp;
+    float mean_rh;
+    boolean is_first_obs = false;
+    int N = 0;
+
+    //For each observation in the HOURLY.CSV
+    for (int i = 0; i < cp.getRowsCount(); i++) {
+
+      //Read the datetime and hour
+      String datetime = String(datetimes[i]);
+      int dt_hour = datetime.substring(11, 13).toInt();
+
+      //If the hour matches day hour
+      if (dt_hour == day_hour)
+      {
+
+        //Get data
+        float snow_depth = (float) snow_depths[i];
+        float air_temp = air_temps[i];
+        float rh = rhs[i];
+
+        //Check if this is the first observation for the hour
+        if (is_first_obs == false)
+        {
+          //Update average vars
+          mean_depth = snow_depth;
+          mean_temp = air_temp;
+          mean_rh = rh;
+          is_first_obs = true;
+          N++;
+        } else {
+          //Update average vars
+          mean_depth = mean_depth + snow_depth;
+          mean_temp = mean_temp + air_temp;
+          mean_rh = mean_rh + rh;
+          N++;
+        }
+
+      }
+    }
+
+    //Check if there were any observations for the hour
+    if (N > 0)
+    {
+      //Compute averages
+      mean_depth = mean_depth / N;
+      mean_temp = (mean_temp / N) * 10.0;
+      mean_rh = mean_rh / N;
+
+
+      //Assemble the data string
+      datastring = datastring + String(round(mean_depth)) + ',' + String(round(mean_temp)) + ',' + String(round(mean_rh)) + ':';
+
+    }
+  }
+
+
+  
+  //Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
+  uint8_t dt_buffer[340];
+
+  // Total bytes in Iridium message 
+  int message_bytes = datastring.length();
+
+  //Set buffer index to zero
+  int buffer_idx = 0;
+
+  // A boolean var for keeping track of any send attempts that may have failed 
+  boolean failed = false;
+
+  //For each byte in the message (i.e. each char)
+  for (int i = 0; i < message_bytes; i++)
+  {
+
+    //Update the buffer at buffer index with corresponding char
+    dt_buffer[buffer_idx] = datastring.charAt(i);
+
+    // Check 340 bytes has been reached, or the end of the message 
+    if (buffer_idx == 339 || i == message_bytes)
+    {
+      
+      //Indicate the modem is trying to send with LED
+      digitalWrite(LED, HIGH);
+
+      //transmit binary buffer data via iridium
+      err = modem.sendSBDBinary(dt_buffer, buffer_idx);
+      
+      //Will attempt 3 times before giving up 
+      int attempt = 1;
+
+      // While message failed to send, or 3 attempts have been exceeded
+      while (err != 0 && attempt <= 3)
+      {
+        // Send the Iridium message
+        err = modem.begin();
+        err = modem.sendSBDBinary(dt_buffer, buffer_idx);
+        attempt = attempt + 1;
+
+      }
+
+      // If all three attempts failed, mark as failed 
+      if (err != 0)
+      {
+        failed = true;
+      }
+
+      //Reset buffer index 
+      buffer_idx = 0;
+      digitalWrite(LED, LOW);
+
+    }else{
+      
+      //increment buffer index 
+      buffer_idx++;
+    }
+
+    
+  }
+  
+
+  //Remove previous daily values CSV as long as send was succesfull
+  if (failed == false)
+  {
+    SD.remove("/HOURLY.CSV");
+  }
+
+  //Return err code
+  return err;
+
+
 }
 
 
@@ -102,7 +293,6 @@ void setup() {
   modem.sleep(); // Put the modem to sleep
   modem.enable9603Npower(false); // Disable power for the 9603N
   modem.enableSuperCapCharger(false); // Disable the super capacitor charger
-  modem.enable841lowPower(true); // Enable the ATtiny841's low power mode
 
 
   // Start RTC (1-sec flash LED means RTC did not initialize)
@@ -125,19 +315,63 @@ void setup() {
   CSV_Parser cp(/*format*/ "sss", /*has_header*/ true, /*delimiter*/ ',');
 
   //Read the parameter file off SD card (snowlog.csv), see README.md 
-  cp.readSDfile("/snowlog.csv");
+  cp.readSDfile("/PARAM.txt");
 
   //Read values from SNOW_PARAM.TXT into global varibles 
   filename = (char**)cp["filename"];
-  N = (char**)cp["N"];
-  logging_intv_min = (char**)cp["log_intv"];
+  N = (int16_t*)cp["N"];
+  irid_freq = (int16_t*)cp["irid_freq"];
+  start_time = (char**)cp["start_time"];
 
-  
-  //Get current logging time from RTC
+    //Get current logging time from RTC
   DateTime now = rtc.now();
 
+    //Write header if first time writing to the DAILY file
+  if (!SD.exists("IRID.CSV"))
+  {
+    //Write datastring and close logfile on SD card
+    dataFile = SD.open("IRID.CSV", FILE_WRITE);
+    if (dataFile)
+    {
+      dataFile.print(String(now.year())+"-"+String(now.month())+"-"+String(now.day())+" "+start_time[0]);
+      dataFile.close();
+    }
+  } 
+
+  CSV_Parser cp("s",true,',');
+
+  cp.readSDfile("/IRID.CSV");
+
+  irid_time = (char**)cp["irid_time"];
+
+  int irid_year = String(irid_time[0]).substring(0,3).toInt();
+  int irid_month =  String(irid_time[0]).substring(5,6).toInt();
+  int irid_day = String(irid_time[0]).substring(8,9).toInt();
+  int irid_hr = String(irid_time[0]).substring(11,12).toInt();
+  int irid_min = String(irid_time[0]).substring(14,15).toInt();
+  int irid_sec = String(irid_time[0]).substring(17,18).toInt();
+
+  DateTime irid_time_ = DateTime(irid_year,irid_month,irid_day,irid_hr,irid_min,irid_sec);
+
+  if(now >= irid_time_)
+  {
+    send_hourly_data();
+    irid_time_ =  irid_time_+TimeSpan(0,irid_freq[0],0,0);
+
+    SD.remove("IRID.CSV");
+    
+    //Write datastring and close logfile on SD card
+    dataFile = SD.open("IRID.CSV", FILE_WRITE);
+    if (dataFile)
+    {
+      dataFile.print(irid_time_.toString());
+      dataFile.close();
+    }
+    
+  }
+
   //Read N average ranging distance from MB7369
-  distance = read_sensor(String(N[0].toInt()));
+  distance = read_sensor(N[0]);
 
 
   while (!sht31.begin(0x44)) {  // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT30 did not initialize)
@@ -160,47 +394,7 @@ void setup() {
     sht31.heater(false);
   }
 
-  String yr_str = String(now.year());
-  String mnth_str;
-  if (now.month() >= 10)
-  {
-    mnth_str = String(now.month());
-  } else {
-    mnth_str = "0" + String(now.month());
-  }
 
-  String day_str;
-  if (now.day() >= 10)
-  {
-    day_str = String(now.day());
-  } else {
-    day_str = "0" + String(now.day());
-  }
-
-  String hr_str;
-  if (now.hour() >= 10)
-  {
-    hr_str = String(now.hour());
-  } else {
-    hr_str = "0" + String(now.hour());
-  }
-
-  String min_str;
-  if (now.minute() >= 10)
-  {
-    min_str = String(now.minute());
-  } else {
-    min_str = "0" + String(now.minute());
-  }
-
-
-  String sec_str;
-  if (now.second() >= 10)
-  {
-    sec_str = String(now.second());
-  } else {
-    sec_str = "0" + String(now.second());
-  }
 
   //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
   String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
@@ -212,105 +406,6 @@ void setup() {
     dataFile.println(datastring);
     dataFile.close();
   }
-
-  //Check that the iridium modem is connected and the the clock has just reached midnight (i.e.,current time is within one logging interval of midnight)
-  if (now.hour() == 0 && now.minute() <= String(logging_intv_min[0]).toInt() && modem.isConnected())
-  {
-    //digitalWrite(led, HIGH); //For trouble shooting
-
-    modem.enableSuperCapCharger(true); // Enable the super capacitor charger
-    while (!modem.checkSuperCapCharger()) ; // Wait for the capacitors to charge
-    modem.enable9603Npower(true); // Enable power for the 9603N
-    modem.begin(); // Wake up the 9603N and prepare it for communications.
-
-    /*Need to obtain the daily observations from the SD card and transmit binary values over Iridium, depending on the logging interval this will likley require 10-15 transmissions*/ 
-    
-
-    //Get the datetime of the days start (i.e., 24 hours previous to current time)
-    DateTime days_start (now - TimeSpan(1,0,0,0));
-
-    //Set paramters for parsing the log file
-    CSV_Parser cp("ss-s-s-", false, ',');
-
-    //Varibles for holding data fields 
-    char **datetimes;
-    char **snowdepths;
-    char **temps;
-    char **rh;
-
-    //Parse the logfile
-    cp.readSDfile(filename[0]);
-
-    datetimes = (char**)cp[0];
-    snowdepths = (char**)cp[1];
-    temps = (char**)cp[3];
-    rh = (char**)cp[5];
-
-    //String for holding daily observations
-    String iridium_string;
-
-    //For each observation in the CSV 
-    for (int i = 0; i < cp.getRowsCount(); i++) {
-
-      //Get the datetime stamp as string 
-      String datetime = String(datetimes[i]);
-
-      //Get the observations year, month, day
-      int dt_year = datetime.substring(0, 4).toInt();
-      int dt_month = datetime.substring(5, 7).toInt();
-      int dt_day = datetime.substring(8, 10).toInt();
-
-      //Check if the observations datetime occured during the current day 
-      if (dt_year == days_start.year() && dt_month == days_start.month() && dt_day == days_start.day())
-      {
-        //Append the observation to the iridium string 
-        String datastring = "{" + String(datetimes[i]) + "," + String(snowdepths[i]) + "," + String(temps[i]) + "," + String(rh[i]) + "}";
-        iridium_string = iridium_string + datastring;
-
-      }
-
-    }
-
-    //varible for keeping a byte count 
-    int byte_count = 0;
-
-    //Length of the iridium string in bytes
-    int str_len = iridium_string.length()+1;
-
-    //Convert iridium_string to character array 
-    char char_array[str_len];
-    iridium_string.toCharArray(char_array,str_len);
-
-    //Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
-    uint8_t buffer[340];
-
-    //For each charachter in the iridium string (i.e., string of the daily observations)
-    for(int j=0; j<str_len;j++)
-    { 
-      //add character to the binary buffer, increment the byte count 
-      buffer[byte_count]=char_array[j];
-      byte_count = byte_count+1;
-
-       //If maximum bytes have been reached 
-      if(byte_count==340)
-      {
-        //reset byte count 
-        byte_count=0;
-
-        //transmit binary buffer data via iridium
-        modem.sendSBDBinary(buffer,sizeof(buffer));
-
-      }
-    }
-    
-    modem.sleep(); // Put the modem to sleep
-    modem.enable9603Npower(false); // Disable power for the 9603N
-    modem.enableSuperCapCharger(false); // Disable the super capacitor charger
-    modem.enable841lowPower(true); // Enable the ATtiny841's low power mode (optional)
-
-    //digitalWrite(led, LOW); //For trouble shooting
-  }
-
 
 }
 
