@@ -333,7 +333,7 @@ void setup() {
     dataFile = SD.open("IRID.CSV", FILE_WRITE);
     if (dataFile)
     {
-      dataFile.print(String(now.year())+"-"+String(now.month())+"-"+String(now.day())+" "+start_time[0]);
+      dataFile.print(now.timestamp(DateTime::TIMESTAMP_DATE)+" "+start_time[0]);
       dataFile.close();
     }
   } 
@@ -364,7 +364,7 @@ void setup() {
     dataFile = SD.open("IRID.CSV", FILE_WRITE);
     if (dataFile)
     {
-      dataFile.print(irid_time_.toString());
+      dataFile.print(irid_time_.timestamp(DateTime::TIMESTAMP_FULL));
       dataFile.close();
     }
     
