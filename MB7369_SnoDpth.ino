@@ -53,22 +53,22 @@ int16_t read_sensor(int N) {
   //Variable for average distance
   float values[N];
 
+  //Start ranging
+  digitalWrite(triggerPin, HIGH);
+  delay(200);
+
   //Take N readings
   for (int i = 0; i < N; i++)
   {
-    //Start ranging
-    digitalWrite(triggerPin, HIGH);
-    delayMicroseconds(30);
     //Get the pulse duration (TOF)
     duration = pulseIn(pulsePin, HIGH);
     //Stop ranging
-    digitalWrite(triggerPin, LOW);
     //Distance = Duration for MB7369 (mm)
     distance = (float) duration;
-    delay(30);
-
     values[i] = distance;
   }
+
+  digitalWrite(triggerPin, LOW);
 
   //Compute the median and return
 
@@ -109,6 +109,7 @@ int send_hourly_data()
   // Set paramters for parsing the log file
   CSV_Parser cp("sdff", true, ',');
 
+
   // Varibles for holding data fields
   char **datetimes;
   int16_t *snow_depths;
@@ -117,6 +118,8 @@ int send_hourly_data()
 
   // Read HOURLY.CSV file
   cp.readSDfile("/HOURLY.CSV");
+
+  int num_rows = cp.getRowsCount();
 
 
   //Populate data arrays from logfile
@@ -129,26 +132,52 @@ int send_hourly_data()
   String datastring = "EFG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
 
 
-  //For each hour 0-23
-  for (int day_hour = 0; day_hour < 24; day_hour++)
+  //Get start and end date information from HOURLY.CSV time series data
+  int start_year = String(datetimes[0]).substring(0, 4).toInt();
+  int start_month = String(datetimes[0]).substring(5, 7).toInt();
+  int start_day = String(datetimes[0]).substring(8, 10).toInt();
+  int start_hour = String(datetimes[0]).substring(11, 13).toInt();
+  int end_year = String(datetimes[num_rows - 1]).substring(0, 4).toInt();
+  int end_month = String(datetimes[num_rows - 1]).substring(5, 7).toInt();
+  int end_day = String(datetimes[num_rows - 1]).substring(8, 10).toInt();
+  int end_hour = String(datetimes[num_rows - 1]).substring(11, 13).toInt();
+
+  //Set the start time to rounded first datetime hour in CSV
+  DateTime start_dt = DateTime(start_year, start_month, start_day, start_hour, 0, 0);
+  //Set the end time to end of last datetime hour in CSV
+  DateTime end_dt = DateTime(end_year, end_month, end_day, end_hour + 1, 0, 0);
+  //For keeping track of the datetime at the end of each hourly interval
+  DateTime intvl_dt;
+
+  while (start_dt < end_dt)
   {
+
+
+    intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);
 
     //Declare average vars for each HYDROS21 output
     float mean_depth;
     float mean_temp;
     float mean_rh;
-    boolean is_first_obs = false;
+    boolean is_first_obs = true;
     int N = 0;
 
     //For each observation in the HOURLY.CSV
-    for (int i = 0; i < cp.getRowsCount(); i++) {
+    for (int i = 0; i < num_rows; i++) {
 
       //Read the datetime and hour
       String datetime = String(datetimes[i]);
+      int dt_year = datetime.substring(0, 4).toInt();
+      int dt_month = datetime.substring(5, 7).toInt();
+      int dt_day = datetime.substring(8, 10).toInt();
       int dt_hour = datetime.substring(11, 13).toInt();
+      int dt_min = datetime.substring(14, 16).toInt();
+      int dt_sec = datetime.substring(17, 19).toInt();
+
+      DateTime obs_dt = DateTime(dt_year, dt_month, dt_day, dt_hour, dt_min, dt_sec);
 
       //If the hour matches day hour
-      if (dt_hour == day_hour)
+      if (obs_dt >= start_dt && obs_dt <= intvl_dt)
       {
 
         //Get data
@@ -157,13 +186,13 @@ int send_hourly_data()
         float rh = rhs[i];
 
         //Check if this is the first observation for the hour
-        if (is_first_obs == false)
+        if (is_first_obs == true)
         {
           //Update average vars
           mean_depth = snow_depth;
           mean_temp = air_temp;
           mean_rh = rh;
-          is_first_obs = true;
+          is_first_obs = false;
           N++;
         } else {
           //Update average vars
@@ -189,6 +218,8 @@ int send_hourly_data()
       datastring = datastring + String(round(mean_depth)) + ',' + String(round(mean_temp)) + ',' + String(round(mean_rh)) + ':';
 
     }
+
+    start_dt = intvl_dt;
   }
 
 
@@ -199,21 +230,18 @@ int send_hourly_data()
   // Total bytes in Iridium message
   int message_bytes = datastring.length();
 
+
   //Set buffer index to zero
   int buffer_idx = 0;
-
-  // A boolean var for keeping track of any send attempts that may have failed
-  boolean failed = false;
 
   //For each byte in the message (i.e. each char)
   for (int i = 0; i < message_bytes; i++)
   {
-
     //Update the buffer at buffer index with corresponding char
     dt_buffer[buffer_idx] = datastring.charAt(i);
 
     // Check 340 bytes has been reached, or the end of the message
-    if (buffer_idx == 339 || i == message_bytes)
+    if (buffer_idx == 339 || i == (message_bytes - 1))
     {
 
       //Indicate the modem is trying to send with led
@@ -222,23 +250,12 @@ int send_hourly_data()
       //transmit binary buffer data via iridium
       err = modem.sendSBDBinary(dt_buffer, buffer_idx);
 
-      //Will attempt 3 times before giving up
-      int attempt = 1;
-
-      // While message failed to send, or 3 attempts have been exceeded
-      while (err != 0 && attempt <= 3)
-      {
-        // Send the Iridium message
-        err = modem.begin();
-        err = modem.sendSBDBinary(dt_buffer, buffer_idx);
-        attempt = attempt + 1;
-
-      }
-
       // If all three attempts failed, mark as failed
       if (err != 0)
       {
-        failed = true;
+        err = modem.begin();
+        modem.adjustSendReceiveTimeout(500);
+        err = modem.sendSBDBinary(dt_buffer, buffer_idx);
       }
 
       //Reset buffer index
@@ -250,16 +267,12 @@ int send_hourly_data()
       //increment buffer index
       buffer_idx++;
     }
-
-
   }
-
 
   //Remove previous daily values CSV as long as send was succesfull
-  if (failed == false)
-  {
-    SD.remove("/HOURLY.CSV");
-  }
+
+  SD.remove("/HOURLY.CSV");
+
 
   //Return err code
   return err;
@@ -270,7 +283,7 @@ int send_hourly_data()
 
 //Code runs once upon waking up the TPL5110
 void setup() {
-  
+
   // Start the I2C wire port connected to the satellite modem
   Wire.begin();
 
