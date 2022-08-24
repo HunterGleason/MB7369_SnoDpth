@@ -40,6 +40,7 @@ int16_t *ultrasonic_height_mm;
 int16_t *irid_freq; // Iridium transmit freqency in hours (Read from PARAM.txt)
 char **start_time;// Time at which first Iridum transmission should occur (Read from PARAM.txt)
 char **irid_time;// For reading timestamp from IRID.CSV
+char **dist_letter_code;// Code for adding correct letter code to Iridium string, e.g., 'A' for stage 'E' for snow depth.
 
 /*Global variables*/
 int16_t distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
@@ -129,7 +130,7 @@ int send_hourly_data()
   rhs = (float*)cp["rh_prct"];
 
   //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
-  String datastring = "EFG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
+  String datastring = String(dist_letter_code[0])+"FG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
 
 
   //Get start and end date information from HOURLY.CSV time series data
@@ -240,34 +241,25 @@ int send_hourly_data()
     //Update the buffer at buffer index with corresponding char
     dt_buffer[buffer_idx] = datastring.charAt(i);
 
-    // Check 340 bytes has been reached, or the end of the message
-    if (buffer_idx == 339 || i == (message_bytes - 1))
-    {
-
-      //Indicate the modem is trying to send with led
-      digitalWrite(led, HIGH);
-
-      //transmit binary buffer data via iridium
-      err = modem.sendSBDBinary(dt_buffer, buffer_idx);
-
-      // If all three attempts failed, mark as failed
-      if (err != 0)
-      {
-        err = modem.begin();
-        modem.adjustSendReceiveTimeout(500);
-        err = modem.sendSBDBinary(dt_buffer, buffer_idx);
-      }
-
-      //Reset buffer index
-      buffer_idx = 0;
-      digitalWrite(led, LOW);
-
-    } else {
-
-      //increment buffer index
-      buffer_idx++;
-    }
+    buffer_idx++;
   }
+
+  //Indicate the modem is trying to send with led
+  digitalWrite(led, HIGH);
+
+  //transmit binary buffer data via iridium
+  err = modem.sendSBDBinary(dt_buffer, buffer_idx);
+
+  // If first attemped failed try once more 
+  if (err != 0 && err != 13)
+  {
+    err = modem.begin();
+    modem.adjustSendReceiveTimeout(500);
+    err = modem.sendSBDBinary(dt_buffer, buffer_idx);
+  }
+
+  digitalWrite(led, LOW);
+
 
   //Remove previous daily values CSV as long as send was succesfull
 
@@ -328,7 +320,7 @@ void setup() {
   }
 
   //Set paramters for parsing the parameter file
-  CSV_Parser cp(/*format*/ "sddsd", /*has_header*/ true, /*delimiter*/ ',');
+  CSV_Parser cp(/*format*/ "sddsds", /*has_header*/ true, /*delimiter*/ ',');
 
   //Read the parameter file off SD card (snowlog.csv), see README.md
   cp.readSDfile("/PARAM.txt");
@@ -339,6 +331,9 @@ void setup() {
   irid_freq = (int16_t*)cp["irid_freq"];
   start_time = (char**)cp["start_time"];
   ultrasonic_height_mm = (int16_t*)cp["ultrasonic_height_mm"];
+  dist_letter_code = (char**)cp["dist_letter_code"];
+
+  
 
   //Log file name
   String filestr = String(filename[0]);
