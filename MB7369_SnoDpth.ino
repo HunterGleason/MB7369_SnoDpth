@@ -1,79 +1,295 @@
-/* 
-DESCRIPTION: See https://github.com/HunterGleason/MB7369_SnoDpth/blob/main
-AUTHOR:Hunter Gleason
-AGENCY:FLNRORD
-DATE:2021-10-18
+/*
+   Date: 2022-07-11
+   Contact: Hunter Gleason (Hunter.Gleason@alumni.unbc.ca)
+   Organization: Ministry of Forests (MOF)
+   Description: This script is written for the purpose of gathering hydrometric data, including the real time transmission of the data via the Iridium satallite network.
+   Using the HYDROS21 probe () water level, temperature and electrical conductivity are measured and stored to a SD card at a specified logging interval. Hourly averages
+   of the data are transmitted over Iridium at a specified transmission frequency. The string output transmitted over Iridium is formatted to be compatible with digestion
+   into a database run by MOF. The various parameters required by the script are specified by a TXT file on the SD card used for logging, for more details on usage of this
+   script please visit the GitHub repository ().
 */
 
-/*Required libriries*/
+
+/*Include the libraries we need*/
 #include "RTClib.h" //Needed for communication with Real Time Clock
-#include <SPI.h>//Needed for working with SD card
-#include <SD.h>//Needed for working with SD card
-#include "Adafruit_SHT31.h"//Needed for SHT31 Temp/Humid sensor
-#include <CSV_Parser.h>//Needed for parsing CSV data 
+#include <SPI.h> //Needed for working with SD card
+#include <SD.h> //Needed for working with SD card
+#include "ArduinoLowPower.h" //Needed for putting Feather M0 to sleep between samples
+#include <IridiumSBD.h> //Needed for communication with IRIDIUM modem 
+#include <CSV_Parser.h> //Needed for parsing CSV data
+#include <QuickStats.h>//Needed for comuting median values 
+#include <Adafruit_SHT31.h>
 
-/*Create librire instanceses*/
-RTC_PCF8523 rtc; //instantiate PCF8523 RTC
-File dataFile;//instantiate a logging file
-Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT31 sensor
-
-
-/*Define pinouts*/
+/*Define global constants*/
+const byte led = 13; // Built in led pin
+const byte chipSelect = 4; // Chip select pin for SD card
+const byte irid_pwr_pin = 6; // Power base PN2222 transistor pin to Iridium modem
+const byte PeriSetPin = 5; //Power relay set pin for all 3.3V peripheral
+const byte PeriUnsetPin = 9; //Power relay unset pin for all 3.3V peripheral
 const byte pulsePin = 12; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
 const byte triggerPin = 11; //Range start / stop pin for MaxBotix MB7369 ultrasonic ranger
-const byte donePin = 10; //Done pin for TPL5110 power breakout
-const byte chipSelect = 4; //Chip select pin for MicroSD breakout
-const byte led = 13; // Pin 13 LED
 
-/*Global constants*/
-char **filename;//Desired name for logfile !!!must be less than equal to 8 char!!!
-char **N; //Number of sensor readings to average.
 
-/*Global variables*/
-long distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
-long duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
-float temp_c; //Variable for holding SHT30 temperture reading
-float humid_prct; //Variable for holding SHT30 humidity reading
+/*Define global vars */
+char **filename; // Name of log file(Read from PARAM.txt)
+char **start_time;// Time at which first Iridum transmission should occur (Read from PARAM.txt)
+String filestr; // Filename as string
+int16_t *sample_intvl; // Sample interval in minutes (Read from PARAM.txt)
+int16_t *irid_freq; // Iridium transmit freqency in hours (Read from PARAM.txt)
+uint32_t irid_freq_hrs; // Iridium transmit freqency in hours
+uint32_t sleep_time;// Logger sleep time in milliseconds
+DateTime transmit_time;// Datetime varible for keeping IRIDIUM transmit time
+DateTime present_time;// Var for keeping the current time
+int err; //IRIDIUM status var
+int16_t *N; //Number of ultrasonic reange sensor readings to average.
+int16_t *ultrasonic_height_mm;
+char **dist_letter_code;// Code for adding correct letter code to Iridium string, e.g., 'A' for stage 'E' for snow depth.
 
-//Function for averageing N readings from MaxBotix MB7369 ultrasonic ranger
-long read_sensor(int N) {
 
-  //Varible for average distance
-  long avg_dist = 0;
 
-  //Take N readings
-  for (int i = 0; i < N; i++)
+/*Define Iridium seriel communication as Serial1 */
+#define IridiumSerial Serial1
+
+
+
+/*Create library instances*/
+RTC_PCF8523 rtc; // Setup a PCF8523 Real Time Clock instance
+File dataFile; // Setup a log file instance
+IridiumSBD modem(IridiumSerial); // Declare the IridiumSBD object
+
+/*Function reads data from a .csv logfile, and uses Iridium modem to send all observations
+   since the previous transmission over satellite at midnight on the RTC.
+*/
+int send_hourly_data()
+{
+
+  // For capturing Iridium errors
+  int err;
+
+  // Provide power to Iridium Modem
+  digitalWrite(irid_pwr_pin, HIGH);
+  // Allow warm up
+  delay(200);
+
+  // Start the serial port connected to the satellite modem
+  IridiumSerial.begin(19200);
+
+  // Set paramters for parsing the log file
+  CSV_Parser cp("sdff", true, ',');
+
+
+  // Varibles for holding data fields
+  char **datetimes;
+  int16_t *snow_depths;
+  float *air_temps;
+  float *rhs;
+
+  // Read HOURLY.CSV file
+  cp.readSDfile("/HOURLY.CSV");
+
+  int num_rows = cp.getRowsCount();
+
+
+  //Populate data arrays from logfile
+  datetimes = (char**)cp["datetime"];
+  snow_depths = (int16_t*)cp["snow_depth_mm"];
+  air_temps = (float*)cp["air_temp_deg_c"];
+  rhs = (float*)cp["rh_prct"];
+
+  //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
+  String datastring = String(dist_letter_code[0])+"FG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
+
+
+  //Get start and end date information from HOURLY.CSV time series data
+  int start_year = String(datetimes[0]).substring(0, 4).toInt();
+  int start_month = String(datetimes[0]).substring(5, 7).toInt();
+  int start_day = String(datetimes[0]).substring(8, 10).toInt();
+  int start_hour = String(datetimes[0]).substring(11, 13).toInt();
+  int end_year = String(datetimes[num_rows - 1]).substring(0, 4).toInt();
+  int end_month = String(datetimes[num_rows - 1]).substring(5, 7).toInt();
+  int end_day = String(datetimes[num_rows - 1]).substring(8, 10).toInt();
+  int end_hour = String(datetimes[num_rows - 1]).substring(11, 13).toInt();
+
+  //Set the start time to rounded first datetime hour in CSV
+  DateTime start_dt = DateTime(start_year, start_month, start_day, start_hour, 0, 0);
+  //Set the end time to end of last datetime hour in CSV
+  DateTime end_dt = DateTime(end_year, end_month, end_day, end_hour + 1, 0, 0);
+  //For keeping track of the datetime at the end of each hourly interval
+  DateTime intvl_dt;
+
+  while (start_dt < end_dt)
   {
-    //Start ranging
-    digitalWrite(triggerPin, HIGH);
-    delayMicroseconds(30);
-    //Get the pulse duration (TOF)
-    duration = pulseIn(pulsePin, HIGH);
-    //Stop ranging
-    digitalWrite(triggerPin, LOW);
-    //Distance = Duration for MB7369 (mm)
-    distance = duration;
 
-    avg_dist = avg_dist + distance;
+
+    intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);
+
+    //Declare average vars for each HYDROS21 output
+    float mean_depth;
+    float mean_temp;
+    float mean_rh;
+    boolean is_first_obs = true;
+    int N = 0;
+
+    //For each observation in the HOURLY.CSV
+    for (int i = 0; i < num_rows; i++) {
+
+      //Read the datetime and hour
+      String datetime = String(datetimes[i]);
+      int dt_year = datetime.substring(0, 4).toInt();
+      int dt_month = datetime.substring(5, 7).toInt();
+      int dt_day = datetime.substring(8, 10).toInt();
+      int dt_hour = datetime.substring(11, 13).toInt();
+      int dt_min = datetime.substring(14, 16).toInt();
+      int dt_sec = datetime.substring(17, 19).toInt();
+
+      DateTime obs_dt = DateTime(dt_year, dt_month, dt_day, dt_hour, dt_min, dt_sec);
+
+      //If the hour matches day hour
+      if (obs_dt >= start_dt && obs_dt <= intvl_dt)
+      {
+
+        //Get data
+        float snow_depth = (float) snow_depths[i];
+        float air_temp = air_temps[i];
+        float rh = rhs[i];
+
+        //Check if this is the first observation for the hour
+        if (is_first_obs == true)
+        {
+          //Update average vars
+          mean_depth = snow_depth;
+          mean_temp = air_temp;
+          mean_rh = rh;
+          is_first_obs = false;
+          N++;
+        } else {
+          //Update average vars
+          mean_depth = mean_depth + snow_depth;
+          mean_temp = mean_temp + air_temp;
+          mean_rh = mean_rh + rh;
+          N++;
+        }
+
+      }
+    }
+
+    //Check if there were any observations for the hour
+    if (N > 0)
+    {
+      //Compute averages
+      mean_depth = mean_depth / N;
+      mean_temp = (mean_temp / N) * 10.0;
+      mean_rh = mean_rh / N;
+
+
+      //Assemble the data string
+      datastring = datastring + String(round(mean_depth)) + ',' + String(round(mean_temp)) + ',' + String(round(mean_rh)) + ':';
+
+    }
+
+    start_dt = intvl_dt;
   }
-  //Compute the average and return
-  avg_dist = avg_dist / N;
-  return avg_dist;
+
+
+
+  //Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
+  uint8_t dt_buffer[340];
+
+  // Total bytes in Iridium message
+  int message_bytes = datastring.length();
+
+
+  //Set buffer index to zero
+  int buffer_idx = 0;
+
+  //For each byte in the message (i.e. each char)
+  for (int i = 0; i < message_bytes; i++)
+  {
+    //Update the buffer at buffer index with corresponding char
+    dt_buffer[buffer_idx] = datastring.charAt(i);
+
+    buffer_idx++;
+  }
+
+  // Prevent from trying to charge to quickly, low current setup
+  modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
+
+  // Begin satellite modem operation, blink led (1-sec) if there was an issue
+  err = modem.begin();
+
+  if (err == ISBD_IS_ASLEEP)
+  {
+    modem.begin();
+  }
+  
+  //Indicate the modem is trying to send with led
+  digitalWrite(led, HIGH);
+
+  //transmit binary buffer data via iridium
+  err = modem.sendSBDBinary(dt_buffer, buffer_idx);
+
+  // If first attemped failed try once more 
+  if (err != 0 && err != 13)
+  {
+    err = modem.begin();
+    modem.adjustSendReceiveTimeout(500);
+    err = modem.sendSBDBinary(dt_buffer, buffer_idx);
+  }
+
+  digitalWrite(led, LOW);
+
+  digitalWrite(irid_pwr_pin,LOW);
+
+
+  //Remove previous daily values CSV as long as send was succesfull
+
+  SD.remove("/HOURLY.CSV");
+
+
+  //Return err code
+  return err;
+
+
 }
 
 
-//Code runs once per power on cycle of the TPL5110
-void setup() {
 
-  //Set pin modes
-  pinMode(pulsePin, INPUT);
-  pinMode(triggerPin, OUTPUT);
-  digitalWrite(triggerPin, LOW);
-  pinMode(donePin, OUTPUT);
+/*
+   The setup function. We only start the sensors, RTC and SD here
+*/
+void setup(void)
+{
+  // Set pin modes
+  pinMode(led, OUTPUT);
+  digitalWrite(led, LOW);
+  pinMode(PeriSetPin, OUTPUT);
+  digitalWrite(PeriSetPin, LOW);
+  pinMode(PeriUnsetPin, OUTPUT);
+  digitalWrite(PeriUnsetPin, HIGH);
+  delay(30);
+  digitalWrite(PeriUnsetPin, LOW);
+  pinMode(irid_pwr_pin, OUTPUT);
+  digitalWrite(irid_pwr_pin, LOW);
+  pinMode(triggerPin,OUTPUT);
+  digitalWrite(triggerPin,LOW);
+  pinMode(pulsePin,INPUT);
 
 
-  // Start RTC (1-sec flash LED means RTC did not intialize)
-  while (!rtc.begin()) {
+  //Make sure a SD is available (2-sec flash led means SD card did not initialize)
+  while (!SD.begin(chipSelect)) {
+    digitalWrite(led, HIGH);
+    delay(2000);
+    digitalWrite(led, LOW);
+    delay(2000);
+  }
+
+  //Set paramters for parsing the parameter file PARAM.txt
+  CSV_Parser cp("sddsdds", true, ',');
+
+
+  //Read the parameter file 'PARAM.txt', blink (1-sec) if fail to read
+  while (!cp.readSDfile("/PARAM.txt"))
+  {
     digitalWrite(led, HIGH);
     delay(1000);
     digitalWrite(led, LOW);
@@ -81,120 +297,159 @@ void setup() {
   }
 
 
-  //Set paramters for parsing the parameter file
-  CSV_Parser cp(/*format*/ "ss", /*has_header*/ true, /*delimiter*/ ',');
-
-  //Read the parameter file off SD card (snowlog.csv), see README.md 
-  cp.readSDfile("/snowlog.csv");
-
-  //Read values from SNOW_PARAM.TXT into global varibles 
+  //Populate data arrays from parameter file PARAM.txt
   filename = (char**)cp["filename"];
-  N = (char**)cp["N"];
+  sample_intvl = (int16_t*)cp["sample_intvl"];
+  irid_freq = (int16_t*)cp["irid_freq"];
+  start_time = (char**)cp["start_time"];
+  N = (int16_t*)cp["N"];
+  ultrasonic_height_mm = (int16_t*)cp["ultrasonic_height_mm"];
+  dist_letter_code = (char**)cp["dist_letter_code"];
 
+  //Sleep time between samples in miliseconds
+  sleep_time = sample_intvl[0] * 1000;
 
-  //Get current logging time from RTC
-  DateTime now = rtc.now();
+  //Log file name
+  filestr = String(filename[0]);
 
-  //Read N average ranging distance from MB7369
-  distance = read_sensor(String(N[0]).toInt());
+  //Iridium transmission frequency in hours
+  irid_freq_hrs = irid_freq[0];
 
+  //Get logging start time from parameter file
+  int start_hour = String(start_time[0]).substring(0, 3).toInt();
+  int start_minute = String(start_time[0]).substring(3, 5).toInt();
+  int start_second = String(start_time[0]).substring(6, 8).toInt();
 
-  while (!sht31.begin(0x44)) {  // Start SHT31, Set to 0x45 for alternate i2c addr (2-sec flash LED means SHT31 did not initalize)
+  // Make sure RTC is available
+  while (!rtc.begin())
+  {
+    digitalWrite(led, HIGH);
+    delay(500);
+    digitalWrite(led, LOW);
+    delay(500);
+  }
+
+  while (!sht31.begin(0x44)) {  // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash led means SHT30 did not initialize)
     digitalWrite(led, HIGH);
     delay(2000);
     digitalWrite(led, LOW);
     delay(2000);
   }
 
-  temp_c = sht31.readTemperature();
-  humid_prct = sht31.readHumidity();
+  //Get the present time
+  present_time = rtc.now();
 
-  //If humidty is above 80% turn on SHT31 heater to evaporate condensation, retake humidty measurment 
-  if (humid_prct >= 80)
+  //Update the transmit time to the start time for present date
+  transmit_time = DateTime(present_time.year(),
+                           present_time.month(),
+                           present_time.day(),
+                           start_hour + irid_freq_hrs,
+                           start_minute,
+                           start_second);
+
+
+
+
+}
+
+/*
+   Main function, sample HYDROS21 and sample interval, log to SD, and transmit hourly averages over IRIDIUM at midnight on the RTC
+*/
+void loop(void)
+{
+
+  //Get the present datetime
+  present_time = rtc.now();
+
+  //If the presnet time has reached transmit_time send all data since last transmission averaged hourly
+  if (present_time >= transmit_time)
+  {
+    // Send the hourly data over Iridium
+    int send_status = send_hourly_data();
+
+    //Update next Iridium transmit time by 'irid_freq_hrs'
+    transmit_time = (transmit_time + TimeSpan(0, irid_freq_hrs, 0, 0));
+  }
+
+
+  digitalWrite(PeriSetPin,HIGH);
+  delay(50);
+  digitalWrite(PeriUnsetPin,LOW);
+  delay(200);
+  
+  //Read N average ranging distance from MB7369
+  distance = read_sensor(N[0]);
+  int16_t snow_depth_mm = ultrasonic_height_mm[0] - distance;
+
+  temp_deg_c = sht31.readTemperature();
+  rh_prct = sht31.readHumidity();
+
+  //If humidity is above 80% turn on SHT31 heater to evaporate condensation, retake humidity measurement
+  if (rh_prct >= 80 )
   {
     sht31.heater(true);
     //Give some time for heater to warm up
     delay(5000);
-    humid_prct = sht31.readHumidity();
+    rh_prct = sht31.readHumidity();
     sht31.heater(false);
   }
 
+  digitalWrite(PeriUnsetPin,HIGH);
+  delay(50);
+  digitalWrite(PeriUnsetPin,LOW);
 
-  //Format current date time values for writing to SD
-  String yr_str = String(now.year());
-  String mnth_str;
-  if (now.month() >= 10)
+  String datastring = dt.timestamp() + "," + snow_depth_mm + "," + temp_deg_c + "," + rh_prct;
+
+  //Write header if first time writing to the logfile
+  if (!SD.exists(filestr.c_str()))
   {
-    mnth_str = String(now.month());
+    dataFile = SD.open(filestr.c_str(), FILE_WRITE);
+    if (dataFile)
+    {
+      dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      dataFile.close();
+    }
+
   } else {
-    mnth_str = "0" + String(now.month());
+    //Write datastring and close logfile on SD card
+    dataFile = SD.open(filestr.c_str(), FILE_WRITE);
+    if (dataFile)
+    {
+      dataFile.println(datastring);
+      dataFile.close();
+    }
+
   }
 
-  String day_str;
-  if (now.day() >= 10)
+  //Write header if first time writing to the DAILY file
+  if (!SD.exists("HOURLY.CSV"))
   {
-    day_str = String(now.day());
+    //Write datastring and close logfile on SD card
+    dataFile = SD.open("HOURLY.CSV", FILE_WRITE);
+    if (dataFile)
+    {
+      dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      dataFile.close();
+    }
   } else {
-    day_str = "0" + String(now.day());
+
+    //Write datastring and close logfile on SD card
+    dataFile = SD.open("HOURLY.CSV", FILE_WRITE);
+    if (dataFile)
+    {
+      dataFile.println(datastring);
+      dataFile.close();
+    }
   }
 
-  String hr_str;
-  if (now.hour() >= 10)
-  {
-    hr_str = String(now.hour());
-  } else {
-    hr_str = "0" + String(now.hour());
-  }
+  //Flash led to idicate a sample was just taken
+  digitalWrite(led, HIGH);
+  delay(250);
+  digitalWrite(led, LOW);
+  delay(250);
 
-  String min_str;
-  if (now.minute() >= 10)
-  {
-    min_str = String(now.minute());
-  } else {
-    min_str = "0" + String(now.minute());
-  }
+  //Put logger in low power mode for lenght 'sleep_time'
+  LowPower.sleep(sleep_time);
 
-
-  String sec_str;
-  if (now.second() >= 10)
-  {
-    sec_str = String(now.second());
-  } else {
-    sec_str = "0" + String(now.second());
-  }
-
-  //Assemble a data string for logging to SD, with date-time, snow depth (mm), temperature (deg C) and humidity (%)
-  String datastring = yr_str + "-" + mnth_str + "-" + day_str + " " + hr_str + ":" + min_str + ":" + sec_str + "," + String(distance) + ",mm," + String(temp_c) + ",deg C," + String(humid_prct) + ",%";
-
-    
-  //Make sure a SD is available (1/2-sec flash LED means SD card did not initalize)
-  while (!SD.begin(chipSelect)) {
-    digitalWrite(led, HIGH);
-    delay(500);
-    digitalWrite(led, LOW);
-    delay(500);
-  }
-
-  //Write datastring and close logfile on SD card
-  dataFile = SD.open(filename[0], FILE_WRITE);
-  if (dataFile)
-  {
-    dataFile.println(datastring);
-    dataFile.close();
-  }
-
-
-}
-
-void loop() {
-
-
-  // We're done!
-  // It's important that the donePin is written LOW and THEN HIGH. This shift
-  // from low to HIGH is how the TPL5110 Nano Power Timer knows to turn off the
-  // microcontroller.
-  digitalWrite(donePin, LOW);
-  digitalWrite(donePin, HIGH);
-  delay(10);
 
 }
