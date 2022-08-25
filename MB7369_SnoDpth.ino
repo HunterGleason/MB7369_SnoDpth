@@ -56,7 +56,7 @@ int16_t read_sensor(int N) {
 
   //Start ranging
   digitalWrite(triggerPin, HIGH);
-  delay(200);
+  delay(100);
 
   //Take N readings
   for (int i = 0; i < N; i++)
@@ -67,7 +67,7 @@ int16_t read_sensor(int N) {
     //Distance = Duration for MB7369 (mm)
     distance = (float) duration;
     values[i] = distance;
-    delay(50);
+    delay(100);
   }
 
   digitalWrite(triggerPin, LOW);
