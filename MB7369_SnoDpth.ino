@@ -17,7 +17,6 @@
 #include "ArduinoLowPower.h" //Needed for putting Feather M0 to sleep between samples
 #include <IridiumSBD.h> //Needed for communication with IRIDIUM modem 
 #include <CSV_Parser.h> //Needed for parsing CSV data
-#include <QuickStats.h>//Needed for comuting median values 
 #include <Adafruit_SHT31.h>
 
 /*Define global constants*/
@@ -27,7 +26,7 @@ const byte irid_pwr_pin = 6; // Power base PN2222 transistor pin to Iridium mode
 const byte PeriSetPin = 5; //Power relay set pin for all 3.3V peripheral
 const byte PeriUnsetPin = 9; //Power relay unset pin for all 3.3V peripheral
 const byte pulsePin = 12; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
-const byte triggerPin = 11; //Range start / stop pin for MaxBotix MB7369 ultrasonic ranger
+const byte triggerPin = 10; //Range start / stop pin for MaxBotix MB7369 ultrasonic ranger
 
 
 /*Define global vars */
@@ -42,8 +41,13 @@ DateTime transmit_time;// Datetime varible for keeping IRIDIUM transmit time
 DateTime present_time;// Var for keeping the current time
 int err; //IRIDIUM status var
 int16_t *N; //Number of ultrasonic reange sensor readings to average.
+int sample_n; //same as N[0]
 int16_t *ultrasonic_height_mm;
 char **dist_letter_code;// Code for adding correct letter code to Iridium string, e.g., 'A' for stage 'E' for snow depth.
+int16_t distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
+int16_t duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
+float temp_deg_c; //Variable for holding SHT30 temperature
+float rh_prct; //Variable for holding SHT30 humidity
 
 
 
@@ -56,6 +60,72 @@ char **dist_letter_code;// Code for adding correct letter code to Iridium string
 RTC_PCF8523 rtc; // Setup a PCF8523 Real Time Clock instance
 File dataFile; // Setup a log file instance
 IridiumSBD modem(IridiumSerial); // Declare the IridiumSBD object
+Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT30 sensor
+
+boolean sorted(int16_t values[])
+{
+  boolean is_sorted = true;
+  for (int i = 0; i < sizeof(values) - 1; i++)
+  {
+    int16_t val1 = values[i];
+    int16_t val2 = values[i + 1];
+    if (val2 < val1)
+    {
+      is_sorted = false;
+    }
+  }
+  return is_sorted;
+}
+
+//Function for averaging N readings from MaxBotix MB7369 ultrasonic ranger
+int16_t read_sensor(int sample_n) {
+
+  //Variable for average distance
+  int16_t values[sample_n];
+
+
+  //Take N readings
+  for (int16_t i = 0; i < sample_n; i++)
+  {
+
+    //Get the pulse duration (TOF)
+    duration = pulseIn(pulsePin, HIGH);
+    //Stop ranging
+    //Distance = Duration for MB7369 (mm)
+    distance = duration;
+    values[i] = distance;
+    delay(100);
+
+  }
+
+  while (!sorted(values))
+  {
+    for (int16_t i = 0; i < sample_n; i++)
+    {
+      int16_t val1 = values[i];
+      int16_t val2 = values[i + 1];
+      if (val2 < val1)
+      {
+        values[i] = val2;
+        values[i + 1] = val1;
+      }
+
+    }
+  }
+
+  if (sample_n % 2 == 0)
+  {
+    float val1 = (float) values[round((sample_n / 2.0)) - 1];
+    float val2 = (float) values[round((sample_n / 2.0))];
+    distance = round((val1 + val2) / 2.0);
+  } else {
+    float val1 = (float) values[round(sample_n / 2.0) - 1];
+    distance = round(val1);
+  }
+
+  return distance;
+}
+
 
 /*Function reads data from a .csv logfile, and uses Iridium modem to send all observations
    since the previous transmission over satellite at midnight on the RTC.
@@ -97,7 +167,7 @@ int send_hourly_data()
   rhs = (float*)cp["rh_prct"];
 
   //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
-  String datastring = String(dist_letter_code[0])+"FG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
+  String datastring = String(dist_letter_code[0]) + "FG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
 
 
   //Get start and end date information from HOURLY.CSV time series data
@@ -221,14 +291,14 @@ int send_hourly_data()
   {
     modem.begin();
   }
-  
+
   //Indicate the modem is trying to send with led
   digitalWrite(led, HIGH);
 
   //transmit binary buffer data via iridium
   err = modem.sendSBDBinary(dt_buffer, buffer_idx);
 
-  // If first attemped failed try once more 
+  // If first attemped failed try once more
   if (err != 0 && err != 13)
   {
     err = modem.begin();
@@ -238,7 +308,7 @@ int send_hourly_data()
 
   digitalWrite(led, LOW);
 
-  digitalWrite(irid_pwr_pin,LOW);
+  digitalWrite(irid_pwr_pin, LOW);
 
 
   //Remove previous daily values CSV as long as send was succesfull
@@ -270,9 +340,9 @@ void setup(void)
   digitalWrite(PeriUnsetPin, LOW);
   pinMode(irid_pwr_pin, OUTPUT);
   digitalWrite(irid_pwr_pin, LOW);
-  pinMode(triggerPin,OUTPUT);
-  digitalWrite(triggerPin,LOW);
-  pinMode(pulsePin,INPUT);
+  pinMode(triggerPin, OUTPUT);
+  digitalWrite(triggerPin, LOW);
+  pinMode(pulsePin, INPUT);
 
 
   //Make sure a SD is available (2-sec flash led means SD card did not initialize)
@@ -303,6 +373,7 @@ void setup(void)
   irid_freq = (int16_t*)cp["irid_freq"];
   start_time = (char**)cp["start_time"];
   N = (int16_t*)cp["N"];
+  sample_n = N[0];
   ultrasonic_height_mm = (int16_t*)cp["ultrasonic_height_mm"];
   dist_letter_code = (char**)cp["dist_letter_code"];
 
@@ -329,12 +400,6 @@ void setup(void)
     delay(500);
   }
 
-  while (!sht31.begin(0x44)) {  // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash led means SHT30 did not initialize)
-    digitalWrite(led, HIGH);
-    delay(2000);
-    digitalWrite(led, LOW);
-    delay(2000);
-  }
 
   //Get the present time
   present_time = rtc.now();
@@ -371,15 +436,27 @@ void loop(void)
     transmit_time = (transmit_time + TimeSpan(0, irid_freq_hrs, 0, 0));
   }
 
-
-  digitalWrite(PeriSetPin,HIGH);
-  delay(50);
-  digitalWrite(PeriUnsetPin,LOW);
-  delay(200);
-  
+  //Start ranging
+  digitalWrite(triggerPin, HIGH);
+  delay(2000);
   //Read N average ranging distance from MB7369
-  distance = read_sensor(N[0]);
-  int16_t snow_depth_mm = ultrasonic_height_mm[0] - distance;
+  distance = read_sensor(sample_n);
+  digitalWrite(triggerPin, LOW);
+  //int16_t snow_depth_mm = ultrasonic_height_mm[0] - distance;
+  int16_t snow_depth_mm = distance;
+
+  digitalWrite(PeriSetPin, HIGH);
+  delay(50);
+  digitalWrite(PeriSetPin, LOW);
+  delay(200);
+
+  if (!sht31.begin(0x44)) { // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash led means SHT30 did not initialize)
+    digitalWrite(led, HIGH);
+    delay(5000);
+    digitalWrite(led, LOW);
+    delay(5000);
+  }
+
 
   temp_deg_c = sht31.readTemperature();
   rh_prct = sht31.readHumidity();
@@ -394,11 +471,11 @@ void loop(void)
     sht31.heater(false);
   }
 
-  digitalWrite(PeriUnsetPin,HIGH);
+  digitalWrite(PeriUnsetPin, HIGH);
   delay(50);
-  digitalWrite(PeriUnsetPin,LOW);
+  digitalWrite(PeriUnsetPin, LOW);
 
-  String datastring = dt.timestamp() + "," + snow_depth_mm + "," + temp_deg_c + "," + rh_prct;
+  String datastring = present_time.timestamp() + "," + snow_depth_mm + "," + temp_deg_c + "," + rh_prct;
 
   //Write header if first time writing to the logfile
   if (!SD.exists(filestr.c_str()))
