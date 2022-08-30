@@ -215,7 +215,7 @@ int send_hourly_data()
       //Compute averages
       mean_depth = mean_depth / N;
       mean_temp = (mean_temp / N) * 10.0;
-      mean_rh = mean_rh / N;
+      mean_rh = (mean_rh / N) * 10.0;
 
 
       //Assemble the data string
@@ -415,7 +415,7 @@ void setup() {
   rh_prct = sht31.readHumidity();
 
   //If humidity is above 80% turn on SHT31 heater to evaporate condensation, retake humidity measurement
-  if (rh_prct >= 80 )
+  if (rh_prct >= 80.0 )
   {
     sht31.heater(true);
     //Give some time for heater to warm up
