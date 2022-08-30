@@ -43,7 +43,8 @@ int err; //IRIDIUM status var
 int16_t *N; //Number of ultrasonic reange sensor readings to average.
 int sample_n; //same as N[0]
 int16_t *ultrasonic_height_mm;
-char **dist_letter_code;// Code for adding correct letter code to Iridium string, e.g., 'A' for stage 'E' for snow depth.
+char **metrics_letter_code;// Code for adding correct letter code to Iridium string, e.g., 'A' for stage 'E' for snow depth.
+String metrics; //String for representing dist_letter_code
 int16_t distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
 int16_t duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
 float temp_deg_c; //Variable for holding SHT30 temperature
@@ -167,7 +168,7 @@ int send_hourly_data()
   rhs = (float*)cp["rh_prct"];
 
   //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
-  String datastring = String(dist_letter_code[0]) + "FG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
+  String datastring = metrics + ":" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
 
 
   //Get start and end date information from HOURLY.CSV time series data
@@ -375,7 +376,9 @@ void setup(void)
   N = (int16_t*)cp["N"];
   sample_n = N[0];
   ultrasonic_height_mm = (int16_t*)cp["ultrasonic_height_mm"];
-  dist_letter_code = (char**)cp["dist_letter_code"];
+  metrics_letter_code = (char**)cp["metrics_letter_code"];
+
+  metrics = String(metrics_letter_code[0]);
 
   //Sleep time between samples in miliseconds
   sleep_time = sample_intvl[0] * 1000;
@@ -442,8 +445,11 @@ void loop(void)
   //Read N average ranging distance from MB7369
   distance = read_sensor(sample_n);
   digitalWrite(triggerPin, LOW);
-  //int16_t snow_depth_mm = ultrasonic_height_mm[0] - distance;
-  int16_t snow_depth_mm = distance;
+
+  if (metrics.charAt(0) == 'E')
+  {
+    distance = ultrasonic_height_mm[0] - distance;
+  } 
 
   digitalWrite(PeriSetPin, HIGH);
   delay(50);
@@ -475,7 +481,7 @@ void loop(void)
   delay(50);
   digitalWrite(PeriUnsetPin, LOW);
 
-  String datastring = present_time.timestamp() + "," + snow_depth_mm + "," + temp_deg_c + "," + rh_prct;
+  String datastring = present_time.timestamp() + "," + distance + "," + temp_deg_c + "," + rh_prct;
 
   //Write header if first time writing to the logfile
   if (!SD.exists(filestr.c_str()))
@@ -483,7 +489,13 @@ void loop(void)
     dataFile = SD.open(filestr.c_str(), FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      if (metrics.charAt(0) == 'E')
+      {
+        dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      } else {
+        dataFile.println("datetime,distance_mm,air_temp_deg_c,rh_prct");
+      }
+
       dataFile.close();
     }
 
@@ -505,7 +517,12 @@ void loop(void)
     dataFile = SD.open("HOURLY.CSV", FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      if (metrics.charAt(0) == 'E')
+      {
+        dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      } else {
+        dataFile.println("datetime,distance_mm,air_temp_deg_c,rh_prct");
+      }
       dataFile.close();
     }
   } else {
