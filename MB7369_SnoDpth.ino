@@ -40,7 +40,9 @@ int16_t *ultrasonic_height_mm;
 int16_t *irid_freq; // Iridium transmit freqency in hours (Read from PARAM.txt)
 char **start_time;// Time at which first Iridum transmission should occur (Read from PARAM.txt)
 char **irid_time;// For reading timestamp from IRID.CSV
-char **dist_letter_code;// Code for adding correct letter code to Iridium string, e.g., 'A' for stage 'E' for snow depth.
+char **metrics_letter_code;// Code for adding correct letter code to Iridium string, e.g., 'AFG'
+String metrics;// String representation of metrics_letter_code
+boolean report_raw_dist = true;
 
 /*Global variables*/
 int16_t distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
@@ -131,7 +133,7 @@ int send_hourly_data()
   rhs = (float*)cp["rh_prct"];
 
   //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
-  String datastring = String(dist_letter_code[0])+"FG:" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
+  String datastring = metrics + ":" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
 
 
   //Get start and end date information from HOURLY.CSV time series data
@@ -251,7 +253,7 @@ int send_hourly_data()
   //transmit binary buffer data via iridium
   err = modem.sendSBDBinary(dt_buffer, buffer_idx);
 
-  // If first attemped failed try once more 
+  // If first attemped failed try once more
   if (err != 0 && err != 13)
   {
     err = modem.begin();
@@ -332,9 +334,14 @@ void setup() {
   irid_freq = (int16_t*)cp["irid_freq"];
   start_time = (char**)cp["start_time"];
   ultrasonic_height_mm = (int16_t*)cp["ultrasonic_height_mm"];
-  dist_letter_code = (char**)cp["dist_letter_code"];
+  metrics_letter_code = (char**)cp["metrics_letter_code"];
 
-  
+  metrics = String(metrics_letter_code[0]);
+
+  if (metrics.charAt(0) == 'E')
+  {
+    report_raw_dist = false;
+  }
 
   //Log file name
   String filestr = String(filename[0]);
@@ -390,7 +397,11 @@ void setup() {
 
   //Read N average ranging distance from MB7369
   distance = read_sensor(N[0]);
-  int16_t snow_depth_mm = ultrasonic_height_mm[0] - distance;
+
+  if (report_raw_dist == false)
+  {
+    distance = ultrasonic_height_mm[0] - distance;
+  }
 
 
   while (!sht31.begin(0x44)) {  // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash led means SHT30 did not initialize)
@@ -413,7 +424,7 @@ void setup() {
     sht31.heater(false);
   }
 
-  String datastring = dt.timestamp() + "," + snow_depth_mm + "," + temp_deg_c + "," + rh_prct;
+  String datastring = dt.timestamp() + "," + distance + "," + temp_deg_c + "," + rh_prct;
 
   //Write header if first time writing to the logfile
   if (!SD.exists(filestr.c_str()))
@@ -421,7 +432,12 @@ void setup() {
     dataFile = SD.open(filestr.c_str(), FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      if (report_raw_dist == false)
+      {
+        dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      } else {
+        dataFile.println("datetime,stage_mm,air_temp_deg_c,rh_prct");
+      }
       dataFile.close();
     }
 
@@ -443,7 +459,12 @@ void setup() {
     dataFile = SD.open("HOURLY.CSV", FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      if (report_raw_dist == false)
+      {
+        dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+      } else {
+        dataFile.println("datetime,stage_mm,air_temp_deg_c,rh_prct");
+      }
       dataFile.close();
     }
   } else {
