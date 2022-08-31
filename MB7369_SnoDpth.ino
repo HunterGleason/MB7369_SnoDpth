@@ -58,18 +58,17 @@ int16_t read_sensor(int N) {
 
   //Start ranging
   digitalWrite(triggerPin, HIGH);
-  delay(100);
+  delay(1000);
 
   //Take N readings
   for (int i = 0; i < N; i++)
   {
     //Get the pulse duration (TOF)
     duration = pulseIn(pulsePin, HIGH);
-    //Stop ranging
     //Distance = Duration for MB7369 (mm)
     distance = (float) duration;
     values[i] = distance;
-    delay(100);
+    delay(150);
   }
 
   digitalWrite(triggerPin, LOW);
@@ -116,7 +115,7 @@ int send_hourly_data()
 
   // Varibles for holding data fields
   char **datetimes;
-  int16_t *snow_depths;
+  int16_t *distances;
   float *air_temps;
   float *rhs;
 
@@ -128,7 +127,12 @@ int send_hourly_data()
 
   //Populate data arrays from logfile
   datetimes = (char**)cp["datetime"];
-  snow_depths = (int16_t*)cp["snow_depth_mm"];
+  if (report_raw_dist == true)
+  {
+    distances = (int16_t*)cp["stage_mm"];
+  } else {
+    distances = (int16_t*)cp["snow_depth_mm"];
+  }
   air_temps = (float*)cp["air_temp_deg_c"];
   rhs = (float*)cp["rh_prct"];
 
@@ -185,7 +189,7 @@ int send_hourly_data()
       {
 
         //Get data
-        float snow_depth = (float) snow_depths[i];
+        float snow_depth = (float) distances[i];
         float air_temp = air_temps[i];
         float rh = rhs[i];
 
