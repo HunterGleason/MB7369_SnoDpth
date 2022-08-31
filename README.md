@@ -51,10 +51,14 @@ There are six columns that must be present, delimited by commas. The first colum
 
 ## Common TPL5110 Log Intervals 
 
+**DO NOT SET BELOW 5-MIN OR IRIDIUM TRANSMISSION WILL FAIL**
+
 |Interval | Switches ON |
 |--------|--------|
-|1| stage_mm           | 
-|2| water_temp_deg_c   | 
-|3| ec_dS_m            | 
-|4| turb_ntu           | 
-|5| snow_depth_mm      | 
+|~5 min| C+D+E | 
+|8 min| C+D | 
+|~12 min| C+E | 
+|15 min| D+E | 
+|30 min| C | 
+|1 hr| D |
+|2 hr| E |
