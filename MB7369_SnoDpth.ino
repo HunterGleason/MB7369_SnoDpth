@@ -1,24 +1,12 @@
-/*
-   Date: 2022-07-11
-   Contact: Hunter Gleason (Hunter.Gleason@alumni.unbc.ca)
-   Organization: Ministry of Forests (MOF)
-   Description: This script is written for the purpose of gathering hydrometric data, including the real time transmission of the data via the Iridium satallite network.
-   Using the HYDROS21 probe () water level, temperature and electrical conductivity are measured and stored to a SD card at a specified logging interval. Hourly averages
-   of the data are transmitted over Iridium at a specified transmission frequency. The string output transmitted over Iridium is formatted to be compatible with digestion
-   into a database run by MOF. The various parameters required by the script are specified by a TXT file on the SD card used for logging, for more details on usage of this
-   script please visit the GitHub repository ().
-*/
-
-
-/*Include the libraries we need*/
+/*Include required libraries*/
 #include "RTClib.h" //Needed for communication with Real Time Clock
 #include <SPI.h> //Needed for working with SD card
 #include <SD.h> //Needed for working with SD card
 #include "ArduinoLowPower.h" //Needed for putting Feather M0 to sleep between samples
 #include <IridiumSBD.h> //Needed for communication with IRIDIUM modem 
 #include <CSV_Parser.h> //Needed for parsing CSV data
-#include <Adafruit_SHT31.h>
-#include <QuickStats.h>
+#include <Adafruit_SHT31.h>//Needed for communication with SHT30 probe
+#include <QuickStats.h>//Needed for commuting median
 
 /*Define global constants*/
 const byte led = 13; // Built in led pin
@@ -28,7 +16,6 @@ const byte PeriSetPin = 5; //Power relay set pin for all 3.3V peripheral
 const byte PeriUnsetPin = 9; //Power relay unset pin for all 3.3V peripheral
 const byte pulsePin = 12; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
 const byte triggerPin = 10; //Range start / stop pin for MaxBotix MB7369 ultrasonic ranger
-
 
 /*Define global vars */
 char **filename; // Name of log file(Read from PARAM.txt)
@@ -43,11 +30,11 @@ DateTime present_time;// Var for keeping the current time
 int err; //IRIDIUM status var
 int16_t *N; //Number of ultrasonic reange sensor readings to average.
 int sample_n; //same as N[0]
-int16_t *ultrasonic_height_mm;
-char **metrics_letter_code;// Code for adding correct letter code to Iridium string, e.g., 'A' for stage 'E' for snow depth.
+int16_t *ultrasonic_height_mm;//Height of ultrasonic sensor,used to compute depth, ignored if stage_mm being logged
+char **metrics_letter_code;// Three letter code for Iridium string, e.g., 'A' for stage 'E' for snow depth (see metrics_lookup in database)
 String metrics; //String for representing dist_letter_code
 int16_t distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
-int16_t duration; //Variable for holding pw duration read from MaxBotix MB7369 ultrasonic ranger
+int16_t duration; //Variable for holding pulse width duration read from MaxBotix ultrasonic ranger
 float temp_deg_c; //Variable for holding SHT30 temperature
 float rh_prct; //Variable for holding SHT30 humidity
 
@@ -66,119 +53,91 @@ Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT30 sensor
 QuickStats stats; //initialize an instance of QuickStats class
 
 
-//Function for averaging N readings from MaxBotix MB7369 ultrasonic ranger
-int16_t read_sensor(int sample_n) {
+/*Define User Functions*/
 
-  //Variable for average distance
-  float values[sample_n];
-  digitalWrite(triggerPin, HIGH);
-  delay(2000);
+int16_t read_sensor(int sample_n) {//Function for averaging N readings from MaxBotix ultrasonic ranger
 
-  //Take N readings
-  for (int16_t i = 0; i < sample_n; i++)
+  float values[sample_n];//Array for storing sampled distances
+  digitalWrite(triggerPin, HIGH);//Write the ranging trigger pin HIGH
+  delay(2000);//Let sensor settle
+
+  for (int16_t i = 0; i < sample_n; i++)//Take N samples
   {
 
-    //Get the pulse duration (TOF)
-    duration = pulseIn(pulsePin, HIGH);
-    //Stop ranging
-    //Distance = Duration for MB7369 (mm)
-    distance = duration;
+    duration = pulseIn(pulsePin, HIGH);//Get the pulse duration (i.e.,time of flight)
+    distance = duration;//Distance = Duration for MB7369 (mm)
     values[i] = distance;
-    delay(150);
+    delay(150);//Dont sample too quickly < 7.5 Htz >
 
   }
 
-  digitalWrite(triggerPin, LOW);
+  digitalWrite(triggerPin, LOW);//Stop continious ranging
 
-  int16_t med_distance = round(stats.median(values, sample_n));
+  int16_t med_distance = round(stats.median(values, sample_n));//Copute median distance
 
-  return med_distance;
+  return med_distance;//Return the median distance, average too noisy with ultrasonics
 }
 
 
-/*Function reads data from a .csv logfile, and uses Iridium modem to send all observations
-   since the previous transmission over satellite at midnight on the RTC.
-*/
-int send_hourly_data()
+int send_hourly_data()//Function reads HOURLY.CSV and sends hourly averages over IRIDIUM, formatted as to be ingested by the Omineca CGI script / database
 {
 
-  // For capturing Iridium errors
-  int err;
+  int err;  // For capturing Iridium errors
 
-  // Provide power to Iridium Modem
-  digitalWrite(irid_pwr_pin, HIGH);
-  // Allow warm up
-  delay(200);
+  digitalWrite(irid_pwr_pin, HIGH);  // Provide power to Iridium Modem
+  delay(200); // Allow warm up
 
-  // Start the serial port connected to the satellite modem
-  IridiumSerial.begin(19200);
+  IridiumSerial.begin(19200);// Start the serial port connected to the satellite modem
 
-  // Set paramters for parsing the log file
-  CSV_Parser cp("sdff", true, ',');
+  CSV_Parser cp("sdff", true, ',');// Set paramters for parsing the log file
 
+  char **datetimes;//pointer to datetimes
+  int16_t *distances;//pointer to distances
+  float *air_temps;//pointer to air temps
+  float *rhs;//pointer to RHs
 
-  // Varibles for holding data fields
-  char **datetimes;
-  int16_t *distances;
-  float *air_temps;
-  float *rhs;
+  cp.readSDfile("/HOURLY.CSV");// Read HOURLY.CSV file from SD
 
-  // Read HOURLY.CSV file
-  cp.readSDfile("/HOURLY.CSV");
+  int num_rows = cp.getRowsCount();//Get # of rows
 
-  int num_rows = cp.getRowsCount();
-
-
-  //Populate data arrays from logfile
-  datetimes = (char**)cp["datetime"];
-  if (metrics.charAt(0) == 'E')
+  datetimes = (char**)cp["datetime"];//populate datetimes
+  if (metrics.charAt(0) == 'E')//If measuring snow depth 
   {
-    distances = (int16_t*)cp["snow_depth_mm"];
-  } else {
-    distances = (int16_t*)cp["stage_mm"];
+    distances = (int16_t*)cp["snow_depth_mm"];//populate snow depths
+  } else {//If measuring stage
+    distances = (int16_t*)cp["stage_mm"];//populate stage 
   }
-  air_temps = (float*)cp["air_temp_deg_c"];
-  rhs = (float*)cp["rh_prct"];
+  air_temps = (float*)cp["air_temp_deg_c"];//populate air temps
+  rhs = (float*)cp["rh_prct"];//populate RHs
 
-  //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
-  String datastring = metrics + ":" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";
+  String datastring = metrics + ":" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";//Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
 
+  int start_year = String(datetimes[0]).substring(0, 4).toInt();//year of first obs
+  int start_month = String(datetimes[0]).substring(5, 7).toInt();//month of first obs
+  int start_day = String(datetimes[0]).substring(8, 10).toInt();//day of first obs
+  int start_hour = String(datetimes[0]).substring(11, 13).toInt();//hour of first obs
+  int end_year = String(datetimes[num_rows - 1]).substring(0, 4).toInt();//year of last obs
+  int end_month = String(datetimes[num_rows - 1]).substring(5, 7).toInt();//month of last obs
+  int end_day = String(datetimes[num_rows - 1]).substring(8, 10).toInt();//day of last obs
+  int end_hour = String(datetimes[num_rows - 1]).substring(11, 13).toInt();//hour of last obs
 
-  //Get start and end date information from HOURLY.CSV time series data
-  int start_year = String(datetimes[0]).substring(0, 4).toInt();
-  int start_month = String(datetimes[0]).substring(5, 7).toInt();
-  int start_day = String(datetimes[0]).substring(8, 10).toInt();
-  int start_hour = String(datetimes[0]).substring(11, 13).toInt();
-  int end_year = String(datetimes[num_rows - 1]).substring(0, 4).toInt();
-  int end_month = String(datetimes[num_rows - 1]).substring(5, 7).toInt();
-  int end_day = String(datetimes[num_rows - 1]).substring(8, 10).toInt();
-  int end_hour = String(datetimes[num_rows - 1]).substring(11, 13).toInt();
+  DateTime start_dt = DateTime(start_year, start_month, start_day, start_hour, 0, 0);//Set start date time to first observation time rounded down @ the hour
+  DateTime end_dt = DateTime(end_year, end_month, end_day, end_hour + 1, 0, 0);//Set the end datetime to last observation + 1 hour
+  DateTime intvl_dt;//For keeping track of the datetime at the end of each hourly interval
 
-  //Set the start time to rounded first datetime hour in CSV
-  DateTime start_dt = DateTime(start_year, start_month, start_day, start_hour, 0, 0);
-  //Set the end time to end of last datetime hour in CSV
-  DateTime end_dt = DateTime(end_year, end_month, end_day, end_hour + 1, 0, 0);
-  //For keeping track of the datetime at the end of each hourly interval
-  DateTime intvl_dt;
-
-  while (start_dt < end_dt)
+  while (start_dt < end_dt)//while the start datetime is < end datetime
   {
+    intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);//intvl_dt is equal to start_dt + 1 hour
+    
+    float mean_depth;//mean depth / distance
+    float mean_temp;//mean air temp
+    float mean_rh;//mean air RH
+    boolean is_first_obs = true;//Boolean indicating first observation 
+    int N = 0;//Sample N counter
 
+    for (int i = 0; i < num_rows; i++) { //For each observation in the HOURLY.CSV
 
-    intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);
-
-    //Declare average vars for each HYDROS21 output
-    float mean_depth;
-    float mean_temp;
-    float mean_rh;
-    boolean is_first_obs = true;
-    int N = 0;
-
-    //For each observation in the HOURLY.CSV
-    for (int i = 0; i < num_rows; i++) {
-
-      //Read the datetime and hour
-      String datetime = String(datetimes[i]);
+      String datetime = String(datetimes[i]);//Datetime and row i
       int dt_year = datetime.substring(0, 4).toInt();
       int dt_month = datetime.substring(5, 7).toInt();
       int dt_day = datetime.substring(8, 10).toInt();
@@ -186,153 +145,113 @@ int send_hourly_data()
       int dt_min = datetime.substring(14, 16).toInt();
       int dt_sec = datetime.substring(17, 19).toInt();
 
-      DateTime obs_dt = DateTime(dt_year, dt_month, dt_day, dt_hour, dt_min, dt_sec);
+      DateTime obs_dt = DateTime(dt_year, dt_month, dt_day, dt_hour, dt_min, dt_sec);//Construct DateTime for obs at row i
 
-      //If the hour matches day hour
-      if (obs_dt >= start_dt && obs_dt <= intvl_dt)
+      if (obs_dt >= start_dt && obs_dt <= intvl_dt)//If obs datetime is withing the current hour interval 
       {
 
-        //Get data
-        float snow_depth = (float) distances[i];
-        float air_temp = air_temps[i];
-        float rh = rhs[i];
+        float snow_depth = (float) distances[i];//depth / distance at row i
+        float air_temp = air_temps[i];//air temp at row i
+        float rh = rhs[i];//RH at row i
 
-        //Check if this is the first observation for the hour
-        if (is_first_obs == true)
+        if (is_first_obs == true)//Check if this is the first observation for the hour
         {
-          //Update average vars
-          mean_depth = snow_depth;
-          mean_temp = air_temp;
-          mean_rh = rh;
-          is_first_obs = false;
-          N++;
+          mean_depth = snow_depth;//mean depth / distance equal to depth at i
+          mean_temp = air_temp;//mean_air temp equal to air temp at i
+          mean_rh = rh;//mean RH equal to RH at i 
+          is_first_obs = false;//No longer first obs
+          N++;//Increment sample N
         } else {
-          //Update average vars
-          mean_depth = mean_depth + snow_depth;
-          mean_temp = mean_temp + air_temp;
-          mean_rh = mean_rh + rh;
-          N++;
+          mean_depth = mean_depth + snow_depth;//Add depth / distance at i to mean_depth
+          mean_temp = mean_temp + air_temp;//Add air temp at i to mean temp
+          mean_rh = mean_rh + rh;//Add RH at i to mean RH
+          N++;//Increment sample N 
         }
 
       }
     }
 
-    //Check if there were any observations for the hour
-    if (N > 0)
+    if (N > 0)//Check if there were any observations for the hour
     {
-      //Compute averages
-      mean_depth = mean_depth / N;
-      mean_temp = (mean_temp / N) * 10.0;
-      mean_rh = (mean_rh / N) *10.0;
-
-
-      //Assemble the data string
-      datastring = datastring + String(round(mean_depth)) + ',' + String(round(mean_temp)) + ',' + String(round(mean_rh)) + ':';
+      mean_depth = mean_depth / N;//mean depth / distance 
+      mean_temp = (mean_temp / N) * 10.0;//mean air temp, convert to int
+      mean_rh = (mean_rh / N) *10.0;//mean RH, convert to int 
+      
+      datastring = datastring + String(round(mean_depth)) + ',' + String(round(mean_temp)) + ',' + String(round(mean_rh)) + ':';//Assemble the data string
 
     }
 
-    start_dt = intvl_dt;
+    start_dt = intvl_dt;//Set intvl_dt to start_dt,i.e., next hour 
   }
 
+  uint8_t dt_buffer[340];//Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
 
+  int message_bytes = datastring.length();// Total bytes in Iridium message
 
-  //Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
-  uint8_t dt_buffer[340];
+  int buffer_idx = 0;//Set buffer index to zero
 
-  // Total bytes in Iridium message
-  int message_bytes = datastring.length();
-
-
-  //Set buffer index to zero
-  int buffer_idx = 0;
-
-  //For each byte in the message (i.e. each char)
-  for (int i = 0; i < message_bytes; i++)
+  for (int i = 0; i < message_bytes; i++)//For each byte in the message (i.e. each char)
   {
-    //Update the buffer at buffer index with corresponding char
-    dt_buffer[buffer_idx] = datastring.charAt(i);
-
-    buffer_idx++;
+    dt_buffer[buffer_idx] = datastring.charAt(i);//Update the buffer at buffer index with corresponding char
+    buffer_idx++;//increment buffer index 
   }
 
-  // Prevent from trying to charge to quickly, low current setup
-  modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);
+  modem.setPowerProfile(IridiumSBD::USB_POWER_PROFILE);// Prevent from trying to charge to quickly, low current setup
 
-  // Begin satellite modem operation, blink led (1-sec) if there was an issue
-  err = modem.begin();
+  err = modem.begin();// Begin satellite modem operation, blink led (1-sec) if there was an issue
 
-  if (err == ISBD_IS_ASLEEP)
+  if (err == ISBD_IS_ASLEEP)//Check if modem is asleep for whatever reason
   {
     modem.begin();
   }
+  
+  digitalWrite(led, HIGH); //Indicate the modem is trying to send with led
 
-  //Indicate the modem is trying to send with led
-  digitalWrite(led, HIGH);
+  err = modem.sendSBDBinary(dt_buffer, buffer_idx); //transmit binary buffer data via iridium
 
-  //transmit binary buffer data via iridium
-  err = modem.sendSBDBinary(dt_buffer, buffer_idx);
-
-  // If first attemped failed try once more
-  if (err != 0 && err != 13)
+  if (err != 0 && err != 13)// If first attemped failed try once more with extended timeout
   {
     err = modem.begin();
     modem.adjustSendReceiveTimeout(500);
     err = modem.sendSBDBinary(dt_buffer, buffer_idx);
   }
 
-  digitalWrite(led, LOW);
+  digitalWrite(led, LOW);//Indicate transmission ended
 
-  digitalWrite(irid_pwr_pin, LOW);
+  digitalWrite(irid_pwr_pin, LOW);//Kill power to modem to save pwr
 
+  SD.remove("/HOURLY.CSV");  //Remove previous daily values CSV 
 
-  //Remove previous daily values CSV as long as send was succesfull
-
-  SD.remove("/HOURLY.CSV");
-
-
-  //Return err code
-  return err;
-
+  return err;  //Return err code, not used but can be used for trouble shooting 
 
 }
 
-
-
-/*
-   The setup function. We only start the sensors, RTC and SD here
-*/
-void setup(void)
+void setup(void)//Setup section, runs once upon powering up the Feather M0
 {
-  // Set pin modes
-  pinMode(led, OUTPUT);
-  digitalWrite(led, LOW);
-  pinMode(PeriSetPin, OUTPUT);
-  digitalWrite(PeriSetPin, LOW);
-  pinMode(PeriUnsetPin, OUTPUT);
-  digitalWrite(PeriUnsetPin, HIGH);
-  delay(30);
-  digitalWrite(PeriUnsetPin, LOW);
-  pinMode(irid_pwr_pin, OUTPUT);
-  digitalWrite(irid_pwr_pin, LOW);
-  pinMode(triggerPin, OUTPUT);
-  digitalWrite(triggerPin, LOW);
-  pinMode(pulsePin, INPUT);
+  pinMode(led, OUTPUT);//Set led pin as OUTPUT
+  digitalWrite(led, LOW);//Turn off led
+  pinMode(PeriSetPin, OUTPUT);//Set peripheral set pin as OUTPUT
+  digitalWrite(PeriSetPin, LOW);//Drive peripheral set pin LOW
+  pinMode(PeriUnsetPin, OUTPUT);//Set peripheral unset pin as OUTPUT
+  digitalWrite(PeriUnsetPin, HIGH);//Drive peripheral unset pin HIGH to assure unset relay
+  delay(30);//Mimimum delay for relay 
+  digitalWrite(PeriUnsetPin, LOW);//Drive peripheral unset pin LOW as it is a latching relay
+  pinMode(irid_pwr_pin, OUTPUT);//Set iridium power pin as OUTPUT
+  digitalWrite(irid_pwr_pin, LOW);//Drive iridium power pin LOW
+  pinMode(triggerPin, OUTPUT);//Set ultrasonic ranging trigger pin as OUTPUT
+  digitalWrite(triggerPin, LOW);//Drive ultrasonic randing trigger pin LOW
+  pinMode(pulsePin, INPUT);//Set ultrasonic pulse width pin as INPUT 
 
-
-  //Make sure a SD is available (2-sec flash led means SD card did not initialize)
-  while (!SD.begin(chipSelect)) {
+  while (!SD.begin(chipSelect)) {//Make sure a SD is available (2-sec flash led means SD card did not initialize)
     digitalWrite(led, HIGH);
     delay(2000);
     digitalWrite(led, LOW);
     delay(2000);
   }
 
-  //Set paramters for parsing the parameter file PARAM.txt
-  CSV_Parser cp("sddsdds", true, ',');
+  CSV_Parser cp("sddsdds", true, ',');//Set paramters for parsing the parameter file PARAM.txt
 
-
-  //Read the parameter file 'PARAM.txt', blink (1-sec) if fail to read
-  while (!cp.readSDfile("/PARAM.txt"))
+  while (!cp.readSDfile("/PARAM.txt"))//Read the parameter file 'PARAM.txt', blink (1-sec) if fail to read
   {
     digitalWrite(led, HIGH);
     delay(1000);
@@ -340,35 +259,28 @@ void setup(void)
     delay(1000);
   }
 
+  filename = (char**)cp["filename"];//Get file name from parameter file 
+  sample_intvl = (int16_t*)cp["sample_intvl"];//Get sample interval in seconds from parameter file
+  irid_freq = (int16_t*)cp["irid_freq"];//Get iridium freqency in hours from parameter file
+  start_time = (char**)cp["start_time"];//Get idridium start time as timestamp from parameter file
+  N = (int16_t*)cp["N"];//Get sample N from parameter file 
+  sample_n = N[0];//Update value of sample_n from parameter file 
+  ultrasonic_height_mm = (int16_t*)cp["ultrasonic_height_mm"];//Get height of ultrasonic sensor in mm from parameter file
+  metrics_letter_code = (char**)cp["metrics_letter_code"];//Get metrics letter code string from parameter file 
 
-  //Populate data arrays from parameter file PARAM.txt
-  filename = (char**)cp["filename"];
-  sample_intvl = (int16_t*)cp["sample_intvl"];
-  irid_freq = (int16_t*)cp["irid_freq"];
-  start_time = (char**)cp["start_time"];
-  N = (int16_t*)cp["N"];
-  sample_n = N[0];
-  ultrasonic_height_mm = (int16_t*)cp["ultrasonic_height_mm"];
-  metrics_letter_code = (char**)cp["metrics_letter_code"];
+  metrics = String(metrics_letter_code[0]);//Update metrics with value from parameter file 
 
-  metrics = String(metrics_letter_code[0]);
+  sleep_time = sample_intvl[0] * 1000;//Sleep time between samples in miliseconds
 
-  //Sleep time between samples in miliseconds
-  sleep_time = sample_intvl[0] * 1000;
+  filestr = String(filename[0]); //Log file name
 
-  //Log file name
-  filestr = String(filename[0]);
+  irid_freq_hrs = irid_freq[0];  //Iridium transmission frequency in hours
 
-  //Iridium transmission frequency in hours
-  irid_freq_hrs = irid_freq[0];
+  int start_hour = String(start_time[0]).substring(0, 3).toInt();//Parse iridium start time hour
+  int start_minute = String(start_time[0]).substring(3, 5).toInt();//Parse iridium start time minute
+  int start_second = String(start_time[0]).substring(6, 8).toInt();//Parse iridium start time second 
 
-  //Get logging start time from parameter file
-  int start_hour = String(start_time[0]).substring(0, 3).toInt();
-  int start_minute = String(start_time[0]).substring(3, 5).toInt();
-  int start_second = String(start_time[0]).substring(6, 8).toInt();
-
-  // Make sure RTC is available
-  while (!rtc.begin())
+  while (!rtc.begin())// Make sure RTC is available, blink at 1/2 sec if not
   {
     digitalWrite(led, HIGH);
     delay(500);
@@ -376,11 +288,9 @@ void setup(void)
     delay(500);
   }
 
+  present_time = rtc.now();  //Get the present datetime
 
-  //Get the present time
-  present_time = rtc.now();
-
-  //Update the transmit time to the start time for present date
+//Update the transmit time to the start time for present date
   transmit_time = DateTime(present_time.year(),
                            present_time.month(),
                            present_time.day(),
@@ -393,37 +303,28 @@ void setup(void)
 
 }
 
-/*
-   Main function, sample HYDROS21 and sample interval, log to SD, and transmit hourly averages over IRIDIUM at midnight on the RTC
-*/
-void loop(void)
+void loop(void)//Code executes repeatedly until loss of power
 {
+  present_time = rtc.now();//Get the present datetime
 
-  //Get the present datetime
-  present_time = rtc.now();
-
-  //If the presnet time has reached transmit_time send all data since last transmission averaged hourly
-  if (present_time >= transmit_time)
+  if (present_time >= transmit_time)//If the presnet time has reached transmit_time send all data since last transmission averaged hourly
   {
-    // Send the hourly data over Iridium
-    int send_status = send_hourly_data();
+    int send_status = send_hourly_data();// Send the hourly data over Iridium
 
-    //Update next Iridium transmit time by 'irid_freq_hrs'
-    transmit_time = (transmit_time + TimeSpan(0, irid_freq_hrs, 0, 0));
+    transmit_time = (transmit_time + TimeSpan(0, irid_freq_hrs, 0, 0));//Update next Iridium transmit time by 'irid_freq_hrs'
   }
 
-  //Read N average ranging distance from MB7369
-  distance = read_sensor(sample_n);
+  distance = read_sensor(sample_n);//Read N average ranging distance from MaxBotix ultrasonic ranger
 
-  if (metrics.charAt(0) == 'E')
+  if (metrics.charAt(0) == 'E')//If the first letter of the metrics letter code is 'E', i.e., snow_depth_mm, otherwise its 'A', i.e., stage_mm
   {
-    distance = ultrasonic_height_mm[0] - distance;
+    distance = ultrasonic_height_mm[0] - distance;//Compute snow depth from distance 
   }
 
-  digitalWrite(PeriSetPin, HIGH);
-  delay(50);
-  digitalWrite(PeriSetPin, LOW);
-  delay(200);
+  digitalWrite(PeriSetPin, HIGH);//Drive set pin high
+  delay(50);//Required delay
+  digitalWrite(PeriSetPin, LOW);//Drive set pin LOW (latched)
+  delay(200);//Let settle  
 
   if (!sht31.begin(0x44)) { // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash led means SHT30 did not initialize)
     digitalWrite(led, HIGH);
@@ -433,39 +334,37 @@ void loop(void)
   }
 
 
-  temp_deg_c = sht31.readTemperature();
-  rh_prct = sht31.readHumidity();
+  temp_deg_c = sht31.readTemperature();//Get temp. reading from SHT30
+  rh_prct = sht31.readHumidity();//Get RH reading from SHT30
 
-  //If humidity is above 80% turn on SHT31 heater to evaporate condensation, retake humidity measurement
-  if (rh_prct >= 80.0 )
+  if (rh_prct>=90.0)//If possible condensation, activate heater and retake humidity measurement
   {
-    sht31.heater(true);
-    //Give some time for heater to warm up
-    delay(5000);
-    rh_prct = sht31.readHumidity();
-    sht31.heater(false);
+    sht31.heater(true);//Turn on SHT30 heater
+    delay(8000);//Give some time for heater to warm up
+    sht31.heater(false);//Turn of heater
+    delay(1000);
+    rh_prct = sht31.readHumidity();//Retake RH sample
   }
 
-  digitalWrite(PeriUnsetPin, HIGH);
-  delay(50);
-  digitalWrite(PeriUnsetPin, LOW);
+  digitalWrite(PeriUnsetPin, HIGH);//Drive unset pin HIGH
+  delay(50);//required delay
+  digitalWrite(PeriUnsetPin, LOW);//Drive unset pin LOW (latched)
 
-  String datastring = present_time.timestamp() + "," + distance + "," + temp_deg_c + "," + rh_prct;
+  String datastring = present_time.timestamp() + "," + distance + "," + temp_deg_c + "," + rh_prct;//Assemble datastring 
 
-  //Write header if first time writing to the logfile
-  if (!SD.exists(filestr.c_str()))
+  if (!SD.exists(filestr.c_str()))//Write header if first time writing to the logfile
   {
-    dataFile = SD.open(filestr.c_str(), FILE_WRITE);
+    dataFile = SD.open(filestr.c_str(), FILE_WRITE);//Open file under filestr name from parameter file 
     if (dataFile)
     {
-      if (metrics.charAt(0) == 'E')
+      if (metrics.charAt(0) == 'E')//If first letter of metrics code is 'E', i.e., snow_depth_mm, write snow header 
       {
         dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
-      } else {
-        dataFile.println("datetime,stage_mm,air_temp_deg_c,rh_prct");
+      } else {//stage_mm, 'A'
+        dataFile.println("datetime,stage_mm,air_temp_deg_c,rh_prct");//Write stage header 
       }
 
-      dataFile.close();
+      dataFile.close();//Close the dataFile 
     }
 
   } else {
@@ -478,11 +377,9 @@ void loop(void)
     }
 
   }
-
-  //Write header if first time writing to the DAILY file
-  if (!SD.exists("HOURLY.CSV"))
+  
+  if (!SD.exists("HOURLY.CSV"))//HOURLY.CSV duplicates the log file until deleted 
   {
-    //Write datastring and close logfile on SD card
     dataFile = SD.open("HOURLY.CSV", FILE_WRITE);
     if (dataFile)
     {
@@ -496,7 +393,6 @@ void loop(void)
     }
   } else {
 
-    //Write datastring and close logfile on SD card
     dataFile = SD.open("HOURLY.CSV", FILE_WRITE);
     if (dataFile)
     {
@@ -504,15 +400,11 @@ void loop(void)
       dataFile.close();
     }
   }
-
-  //Flash led to idicate a sample was just taken
-  digitalWrite(led, HIGH);
+  digitalWrite(led, HIGH);//Flash led to idicate a sample was just taken
   delay(250);
   digitalWrite(led, LOW);
   delay(250);
 
-  //Put logger in low power mode for lenght 'sleep_time'
-  LowPower.sleep(sleep_time);
-
+  LowPower.sleep(sleep_time);//Put logger in low power mode for length 'sleep_time'
 
 }
