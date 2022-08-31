@@ -7,7 +7,7 @@ Assuming that the Arduino IDE is already installed, and configured for use with 
 ``` bash
 cd ~/Arduino
 git clone https://github.com/HunterGleason/MB7369_SnoDpth.git
-git checkout wth_iridium
+git checkout tpl
 ```
 This script relies on the following libraries, which can be installed using the Library Manger in the Arduino IDE:
 
@@ -18,16 +18,43 @@ This script relies on the following libraries, which can be installed using the 
 - <IridiumSBD.h>//Needed for communication with the 9603N Iridium modem
 - <Wire.h>//Needed for I2C communication
 - <CSV_Parser.h>//Needed for parsing CSV data
+- <QuickStats.h>//Needed for computing median
 
-Once all the required libraries are present, I recommend setting the PCF8523 RTC, described in Adafruit [PCF8523](https://learn.adafruit.com/adafruit-pcf8523-real-time-clock/). After the RTC has been set, obtain a micro-SD card, and using a text editor, save the 'snowlog.csv' parameter file described below with desired parameters. Check that the switches on [Sparkfun TPL5110](https://www.sparkfun.com/products/15353) match the desired logging interval specified in 'snowlog.csv'. Usign the IDE upload the MB7369_SnoDpth.ino to the MCU, unplug the USB, and plug in the USB adapter wired to the TPL5110 [schematic](https://github.com/HunterGleason/MB7369_SnoDpth/blob/wth_iridium_hrly/MB7369_SnoDpth.svg) into the MCU. If a battery is connected, logging should begin at ~ the specified interval, be sure to disconnect power before removing or installing the micro-SD card. Data will be output under the specified file name in a CSV.
+Once all the required libraries are present, I recommend setting the PCF8523 RTC, described in Adafruit [PCF8523](https://learn.adafruit.com/adafruit-pcf8523-real-time-clock/). After the RTC has been set, obtain a micro-SD card, and using a text editor, save the 'PARAM.txt' parameter file described below with desired parameters. Using the IDE upload the MB7369_SnoDpth.ino to the MCU, unplug the USB, and plug in the USB adapter wired to the TPL5110 [schematic](https://github.com/HunterGleason/MB7369_SnoDpth/blob/wth_iridium_hrly/MB7369_SnoDpth.svg) into the MCU. If a battery is connected, logging should begin at ~ the specified interval, be sure to disconnect power before removing or installing the micro-SD card, or loading new code. Data will be output under the specified file name in a text file.
 
 # Operation 
-See [schematic](https://github.com/HunterGleason/MB7369_SnoDpth/blob/wth_iridium_hrly/MB7369_SnoDpth.svg) for wiring schematic, and installation section. Time is kept using the PCF8523 real time clock, be sure to set the RTC to the desired time before use [Adafruit PCF8523](https://learn.adafruit.com/adafruit-pcf8523-real-time-clock/). Power management is done using the Sparkfun Low Power timer (TPL5110), and the logging interval is set by adjusting the switches present on the break out board [Sparkfun TPL5110](https://www.sparkfun.com/products/15353). A parameter file named 'snowlog.csv' is required for the operation of the logger, an example of such a file is shown in the **Parameter File** section. This file must be present on the micro-SD card.
+See [schematic](https://github.com/HunterGleason/MB7369_SnoDpth/blob/wth_iridium_hrly/MB7369_SnoDpth.svg) for wiring schematic, and installation section. Time is kept using the PCF8523 real time clock, be sure to set the RTC to the desired time before use [Adafruit PCF8523](https://learn.adafruit.com/adafruit-pcf8523-real-time-clock/). Power management is done using the Sparkfun Low Power timer (TPL5110), and the logging interval is set by adjusting the switches present on the break out board [Sparkfun TPL5110](https://www.sparkfun.com/products/15353). A parameter file named 'PARAM.txt' is required for the operation of the logger, an example of such a file is shown in the **Parameter File** section. This file must be present on the micro-SD card.
 
 # Parameter File
-An example of the 'snowlog.csv' is shown below, this file must be saved to the micro-SD before using this script:
+An example of the 'PARAM.txt' is shown below, this file must be saved to the micro-SD before using this script:
 
-filename,N,log_intv<br/>
-snowtest.csv,6,5
+filename,N,irid_freq,start_time,ultrasonic_height_mm,metrics_letter_code<br/>
+DATA.TXT,15,6,12:00:00,5000,EFG
 
-There are three columns that must be present, delimited by commas. The first column named *filename* is the desired name for the data log file, **and must be less than or equal to 8 characters, containing only letters and numbers!** The second column *N* is the number of samples to average when taking distance readings from the MaxBotix MB7369 ultrasonic sensor. Finally, *log_intv* is the approximate logging interval (in minutes), which is determined by the switch configuration on the Sparkfun TPL5110 breakout board. For proper Iridium communication it is important that the *log_intv* value corresponds with the switch configuration on the TPL5110. If using a *log_intv* less than 5-minutes then Iridium communication may fail as communication time may exceed the TPL5110 power cycle interval.  
+There are six columns that must be present, delimited by commas. The first column named *filename* is the desired name for the data log file, **and must be less than or equal to 8 characters, containing only letters and numbers!** The second column *N* is the number of samples to average when taking distance readings from the MaxBotix MB7369 ultrasonic sensor. *irid_freq* is the Iridium transmit frequency in hours, and *start_time* is the timestamp *HH:MM:SS* seting the time for the first Iridium transmission. *ultrasonic_height_mm* is the height of the ultrasonic ranger and is used to compute snow depth in the case that the first letter code of *metrics_letter_code* equals 'E' (snow_depth_mm) opposed to 'A' (stage_mm). If 'A', this parameter is ingnored, but a value must be included anyways. *metrics_letter_code* is a three letter all-caps string defining the metrics being sent to the database and are defined in the *metrics_lookup* table.  
+
+# Helpful Tables 
+
+## Relevent Metric Letter Codes From Omineca Database 
+
+|obs_id |metric| letter_code|
+|--------|--------|--------|
+|1 | stage_mm          | A|
+|5 | snow_depth_mm     | E|
+|6 | air_2m_temp_deg_c | F|
+|7 | air_2m_rh_prct    | G|
+|8 | air_6m_temp_deg_c | H|
+|9 | air_6m_rh_prct    | I|
+|10| air_10m_temp_deg_c| J|
+|11| air_10m_rh_prct   | K|
+
+
+## Common TPL5110 Log Intervals 
+
+|Interval | Switches ON |
+|--------|--------|
+|1| stage_mm           | 
+|2| water_temp_deg_c   | 
+|3| ec_dS_m            | 
+|4| turb_ntu           | 
+|5| snow_depth_mm      | 
