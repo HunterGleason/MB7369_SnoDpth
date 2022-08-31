@@ -18,6 +18,7 @@
 #include <IridiumSBD.h> //Needed for communication with IRIDIUM modem 
 #include <CSV_Parser.h> //Needed for parsing CSV data
 #include <Adafruit_SHT31.h>
+#include <QuickStats.h>
 
 /*Define global constants*/
 const byte led = 13; // Built in led pin
@@ -62,28 +63,16 @@ RTC_PCF8523 rtc; // Setup a PCF8523 Real Time Clock instance
 File dataFile; // Setup a log file instance
 IridiumSBD modem(IridiumSerial); // Declare the IridiumSBD object
 Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT30 sensor
+QuickStats stats; //initialize an instance of QuickStats class
 
-boolean sorted(int16_t values[])
-{
-  boolean is_sorted = true;
-  for (int i = 0; i < sizeof(values) - 1; i++)
-  {
-    int16_t val1 = values[i];
-    int16_t val2 = values[i + 1];
-    if (val2 < val1)
-    {
-      is_sorted = false;
-    }
-  }
-  return is_sorted;
-}
 
 //Function for averaging N readings from MaxBotix MB7369 ultrasonic ranger
 int16_t read_sensor(int sample_n) {
 
   //Variable for average distance
-  int16_t values[sample_n];
-
+  float values[sample_n];
+  digitalWrite(triggerPin, HIGH);
+  delay(2000);
 
   //Take N readings
   for (int16_t i = 0; i < sample_n; i++)
@@ -95,36 +84,15 @@ int16_t read_sensor(int sample_n) {
     //Distance = Duration for MB7369 (mm)
     distance = duration;
     values[i] = distance;
-    delay(100);
+    delay(150);
 
   }
 
-  while (!sorted(values))
-  {
-    for (int16_t i = 0; i < sample_n; i++)
-    {
-      int16_t val1 = values[i];
-      int16_t val2 = values[i + 1];
-      if (val2 < val1)
-      {
-        values[i] = val2;
-        values[i + 1] = val1;
-      }
+  digitalWrite(triggerPin, LOW);
 
-    }
-  }
+  int16_t med_distance = round(stats.median(values, sample_n));
 
-  if (sample_n % 2 == 0)
-  {
-    float val1 = (float) values[round((sample_n / 2.0)) - 1];
-    float val2 = (float) values[round((sample_n / 2.0))];
-    distance = round((val1 + val2) / 2.0);
-  } else {
-    float val1 = (float) values[round(sample_n / 2.0) - 1];
-    distance = round(val1);
-  }
-
-  return distance;
+  return med_distance;
 }
 
 
@@ -151,7 +119,7 @@ int send_hourly_data()
 
   // Varibles for holding data fields
   char **datetimes;
-  int16_t *snow_depths;
+  int16_t *distances;
   float *air_temps;
   float *rhs;
 
@@ -163,7 +131,12 @@ int send_hourly_data()
 
   //Populate data arrays from logfile
   datetimes = (char**)cp["datetime"];
-  snow_depths = (int16_t*)cp["snow_depth_mm"];
+  if (metrics.charAt(0) == 'E')
+  {
+    distances = (int16_t*)cp["snow_depth_mm"];
+  } else {
+    distances = (int16_t*)cp["stage_mm"];
+  }
   air_temps = (float*)cp["air_temp_deg_c"];
   rhs = (float*)cp["rh_prct"];
 
@@ -220,7 +193,7 @@ int send_hourly_data()
       {
 
         //Get data
-        float snow_depth = (float) snow_depths[i];
+        float snow_depth = (float) distances[i];
         float air_temp = air_temps[i];
         float rh = rhs[i];
 
@@ -250,7 +223,7 @@ int send_hourly_data()
       //Compute averages
       mean_depth = mean_depth / N;
       mean_temp = (mean_temp / N) * 10.0;
-      mean_rh = mean_rh / N;
+      mean_rh = (mean_rh / N) *10.0;
 
 
       //Assemble the data string
@@ -439,17 +412,13 @@ void loop(void)
     transmit_time = (transmit_time + TimeSpan(0, irid_freq_hrs, 0, 0));
   }
 
-  //Start ranging
-  digitalWrite(triggerPin, HIGH);
-  delay(2000);
   //Read N average ranging distance from MB7369
   distance = read_sensor(sample_n);
-  digitalWrite(triggerPin, LOW);
 
   if (metrics.charAt(0) == 'E')
   {
     distance = ultrasonic_height_mm[0] - distance;
-  } 
+  }
 
   digitalWrite(PeriSetPin, HIGH);
   delay(50);
@@ -468,7 +437,7 @@ void loop(void)
   rh_prct = sht31.readHumidity();
 
   //If humidity is above 80% turn on SHT31 heater to evaporate condensation, retake humidity measurement
-  if (rh_prct >= 80 )
+  if (rh_prct >= 80.0 )
   {
     sht31.heater(true);
     //Give some time for heater to warm up
@@ -493,7 +462,7 @@ void loop(void)
       {
         dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
       } else {
-        dataFile.println("datetime,distance_mm,air_temp_deg_c,rh_prct");
+        dataFile.println("datetime,stage_mm,air_temp_deg_c,rh_prct");
       }
 
       dataFile.close();
@@ -521,7 +490,7 @@ void loop(void)
       {
         dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
       } else {
-        dataFile.println("datetime,distance_mm,air_temp_deg_c,rh_prct");
+        dataFile.println("datetime,stage_mm,air_temp_deg_c,rh_prct");
       }
       dataFile.close();
     }
