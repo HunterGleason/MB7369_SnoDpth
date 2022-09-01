@@ -335,12 +335,10 @@ void setup() {//Code runs once upon waking up of the TPL5110 power timer
   temp_deg_c = sht31.readTemperature();//Get temp. reading from SHT30
   rh_prct = sht31.readHumidity();//Get RH reading from SHT30
 
-  float t_dew = temp_deg_c -  ((100.0 - rh_prct) / 5.0); //Approx. T-dew
-
-  if (temp_deg_c <= t_dew )//If condensation, activate heater and retake humidity measurement
+  if (rh_prct>=90.0 )//If condensation, activate heater and retake humidity measurement
   {
     sht31.heater(true);//Turn on SHT30 heater
-    delay(5000);//Give some time for heater to warm up
+    delay(8000);//Give some time for heater to warm up
     sht31.heater(false);//Turn of heater
     delay(1000);
     rh_prct = sht31.readHumidity();//Retake RH sample
