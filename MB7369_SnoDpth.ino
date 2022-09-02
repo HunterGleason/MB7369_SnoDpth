@@ -312,7 +312,7 @@ void setup() {//Code runs once upon waking up of the TPL5110 power timer
 
   irid_time_ = DateTime(irid_year, irid_month, irid_day, irid_hr, irid_min, irid_sec);//Construct Iridium transmit time
 
-  if (dt >= irid_time_)//Check if the current time is greater then or equal to the iridium transmit time
+  if (dt >= irid_time_ && SD.exists("HOURLY.CSV"))//Check if the current time is greater then or equal to the iridium transmit time
   {
     send_hourly_data();//Send the hourly averages over Iridium
   }
