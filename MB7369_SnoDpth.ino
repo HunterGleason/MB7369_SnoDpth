@@ -127,11 +127,12 @@ int send_hourly_data() //Function reads contents of HOURLY.CSV and sends hourly 
   {
     intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);//Set the intvl_dt as start_dt + 1 hour
 
-    float mean_depth;//var for mean depth / distance
-    float mean_temp;//var for mean air temp
-    float mean_rh;//var for mean air RH
+    float mean_depth=-9999;//var for mean depth / distance
+    float mean_temp=-9999;//var for mean air temp
+    float mean_rh=-9999;//var for mean air RH
     boolean is_first_obs = true;//boolean for indicating first observation in HOURLY.CSV
     int N = 0;//var for # of obs
+    int N_snow = 0;
 
     for (int i = 0; i < num_rows; i++) {//For each observation in the HOURLY.CSV
 
@@ -156,13 +157,21 @@ int send_hourly_data() //Function reads contents of HOURLY.CSV and sends hourly 
         if (is_first_obs == true)//Check if this is the first observation for the hour
         {
 
-          mean_depth = snow_depth;//set avg equal to first obs
+          if(snow_depth>-100.0)
+          {
+            mean_depth = snow_depth;//set avg equal to first obs
+            N_snow++;
+          }
           mean_temp = air_temp;
           mean_rh = rh;
           is_first_obs = false;//update state of is_first_obs to false
           N++;//increment obs count
         } else {
-          mean_depth = mean_depth + snow_depth;//add value at i to mean depth sum
+          if(snow_depth>-100.0)
+          {
+            mean_depth = mean_depth + snow_depth;//add value at i to mean depth sum
+            N_snow++;
+          }
           mean_temp = mean_temp + air_temp;
           mean_rh = mean_rh + rh;
           N++;//increment obs count
@@ -171,9 +180,13 @@ int send_hourly_data() //Function reads contents of HOURLY.CSV and sends hourly 
       }
     }
 
+    if(N_snow > 0)
+    {
+      mean_depth = mean_depth / N_snow;//compute mean depth (distance)
+    }
+    
     if (N > 0)//Check if there were any observations for the hour
     {
-      mean_depth = mean_depth / N;//compute mean depth (distance)
       mean_temp = (mean_temp / N) * 10.0;//compute mean temp, convert to integer
       mean_rh = (mean_rh / N) * 10.0;//compute mean RH, convert to integer
 
@@ -402,6 +415,7 @@ void loop() {
   // from low to HIGH is how the TPL5110 Nano Power Timer knows to turn off the
   // microcontroller.
   digitalWrite(donePin, LOW);
+  delay(10);
   digitalWrite(donePin, HIGH);
   delay(10);
 
