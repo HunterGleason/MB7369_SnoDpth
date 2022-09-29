@@ -127,9 +127,9 @@ int send_hourly_data() //Function reads contents of HOURLY.CSV and sends hourly 
   {
     intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);//Set the intvl_dt as start_dt + 1 hour
 
-    float mean_depth=-9999;//var for mean depth / distance
-    float mean_temp=-9999;//var for mean air temp
-    float mean_rh=-9999;//var for mean air RH
+    float mean_depth=-9999.0;//var for mean depth / distance
+    float mean_temp=-9999.0;//var for mean air temp
+    float mean_rh=-9999.0;//var for mean air RH
     boolean is_first_obs = true;//boolean for indicating first observation in HOURLY.CSV
     int N = 0;//var for # of obs
     int N_snow = 0;
