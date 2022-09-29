@@ -127,10 +127,11 @@ int send_hourly_data() //Function reads contents of HOURLY.CSV and sends hourly 
   {
     intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);//Set the intvl_dt as start_dt + 1 hour
 
-    float mean_depth=-9999.0;//var for mean depth / distance
-    float mean_temp=-9999.0;//var for mean air temp
-    float mean_rh=-9999.0;//var for mean air RH
+    float mean_depth = -9999.0; //var for mean depth / distance
+    float mean_temp = -9999.0; //var for mean air temp
+    float mean_rh = -9999.0; //var for mean air RH
     boolean is_first_obs = true;//boolean for indicating first observation in HOURLY.CSV
+    boolean is_first_obs_snow = true;//boolean for first hourly snow obs
     int N = 0;//var for # of obs
     int N_snow = 0;
 
@@ -153,25 +154,31 @@ int send_hourly_data() //Function reads contents of HOURLY.CSV and sends hourly 
         float air_temp = air_temps[i];// air temp is air_temps at i
         float rh = rhs[i];// air RH is rhs at i
 
-
-        if (is_first_obs == true)//Check if this is the first observation for the hour
+        //Need to treat snow depth diffrent as sound reading is not guranteed
+        if (is_first_obs_snow == true)
         {
-
-          if(snow_depth>-100.0)
+          //Make sure depth is greater than zero, with 100 mm tolerance 
+          if (snow_depth > -100.0)
           {
             mean_depth = snow_depth;//set avg equal to first obs
             N_snow++;
           }
+        } else {
+          if (snow_depth > -100.0)
+          {
+            mean_depth = mean_depth + snow_depth;//add value at i to mean depth sum
+            N_snow++;
+          }
+        }
+
+        if (is_first_obs == true)//Check if this is the first observation for the hour
+        {
           mean_temp = air_temp;
           mean_rh = rh;
           is_first_obs = false;//update state of is_first_obs to false
           N++;//increment obs count
         } else {
-          if(snow_depth>-100.0)
-          {
-            mean_depth = mean_depth + snow_depth;//add value at i to mean depth sum
-            N_snow++;
-          }
+
           mean_temp = mean_temp + air_temp;
           mean_rh = mean_rh + rh;
           N++;//increment obs count
@@ -180,11 +187,11 @@ int send_hourly_data() //Function reads contents of HOURLY.CSV and sends hourly 
       }
     }
 
-    if(N_snow > 0)
+    if (N_snow > 0)
     {
       mean_depth = mean_depth / N_snow;//compute mean depth (distance)
     }
-    
+
     if (N > 0)//Check if there were any observations for the hour
     {
       mean_temp = (mean_temp / N) * 10.0;//compute mean temp, convert to integer
@@ -348,7 +355,7 @@ void setup() {//Code runs once upon waking up of the TPL5110 power timer
   temp_deg_c = sht31.readTemperature();//Get temp. reading from SHT30
   rh_prct = sht31.readHumidity();//Get RH reading from SHT30
 
-  if (rh_prct>=90.0 )//If condensation, activate heater and retake humidity measurement
+  if (rh_prct >= 90.0 ) //If condensation, activate heater and retake humidity measurement
   {
     sht31.heater(true);//Turn on SHT30 heater
     delay(8000);//Give some time for heater to warm up
