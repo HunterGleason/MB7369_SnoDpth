@@ -5,7 +5,7 @@
 #include "ArduinoLowPower.h" //Needed for putting Feather M0 to sleep between samples
 #include <IridiumSBD.h> //Needed for communication with IRIDIUM modem 
 #include <CSV_Parser.h> //Needed for parsing CSV data
-#include <Adafruit_SHT31.h>//Needed for communication with SHT30 probe
+#include <Adafruit_AHTX0.h> //Needed for communicating with  AHT20
 #include <QuickStats.h>//Needed for commuting median
 
 /*Define global constants*/
@@ -35,9 +35,7 @@ char **metrics_letter_code;// Three letter code for Iridium string, e.g., 'A' fo
 String metrics; //String for representing dist_letter_code
 int16_t distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
 int16_t duration; //Variable for holding pulse width duration read from MaxBotix ultrasonic ranger
-float temp_deg_c; //Variable for holding SHT30 temperature
-float rh_prct; //Variable for holding SHT30 humidity
-
+sensors_event_t rh_prct, temp_deg_c; //Variable for holding AHT20 temp and RH vals
 
 
 /*Define Iridium seriel communication as Serial1 */
@@ -46,10 +44,10 @@ float rh_prct; //Variable for holding SHT30 humidity
 
 
 /*Create library instances*/
-RTC_PCF8523 rtc; // Setup a PCF8523 Real Time Clock instance
+RTC_DS3231 rtc; // Setup a PCF8523 Real Time Clock instance
 File dataFile; // Setup a log file instance
 IridiumSBD modem(IridiumSerial); // Declare the IridiumSBD object
-Adafruit_SHT31 sht31 = Adafruit_SHT31();//instantiate SHT30 sensor
+Adafruit_AHTX0 aht;//instantiate AHT20 object 
 QuickStats stats; //initialize an instance of QuickStats class
 
 
@@ -129,11 +127,12 @@ int send_hourly_data()//Function reads HOURLY.CSV and sends hourly averages over
   {
     intvl_dt = start_dt + TimeSpan(0, 1, 0, 0);//intvl_dt is equal to start_dt + 1 hour
     
-    float mean_depth;//mean depth / distance
+    float mean_depth=-9999.0;//mean depth / distance
     float mean_temp;//mean air temp
     float mean_rh;//mean air RH
     boolean is_first_obs = true;//Boolean indicating first observation 
     int N = 0;//Sample N counter
+    int N_snow = 0;
 
     for (int i = 0; i < num_rows; i++) { //For each observation in the HOURLY.CSV
 
@@ -156,13 +155,21 @@ int send_hourly_data()//Function reads HOURLY.CSV and sends hourly averages over
 
         if (is_first_obs == true)//Check if this is the first observation for the hour
         {
-          mean_depth = snow_depth;//mean depth / distance equal to depth at i
+          if(snow_depth>-100.0)
+          {
+            mean_depth = snow_depth;//mean depth / distance equal to depth at i
+            N_snow++;
+          }
           mean_temp = air_temp;//mean_air temp equal to air temp at i
           mean_rh = rh;//mean RH equal to RH at i 
           is_first_obs = false;//No longer first obs
           N++;//Increment sample N
         } else {
-          mean_depth = mean_depth + snow_depth;//Add depth / distance at i to mean_depth
+          if(snow_depth>-100.0)
+          {
+            mean_depth = mean_depth + snow_depth;//Add depth / distance at i to mean_depth
+            N_snow++;
+          }
           mean_temp = mean_temp + air_temp;//Add air temp at i to mean temp
           mean_rh = mean_rh + rh;//Add RH at i to mean RH
           N++;//Increment sample N 
@@ -171,9 +178,13 @@ int send_hourly_data()//Function reads HOURLY.CSV and sends hourly averages over
       }
     }
 
-    if (N > 0)//Check if there were any observations for the hour
+    if(N_snow>0)
     {
       mean_depth = mean_depth / N;//mean depth / distance 
+    }
+    
+    if (N > 0)//Check if there were any observations for the hour
+    {
       mean_temp = (mean_temp / N) * 10.0;//mean air temp, convert to int
       mean_rh = (mean_rh / N) *10.0;//mean RH, convert to int 
       
@@ -314,6 +325,11 @@ void loop(void)//Code executes repeatedly until loss of power
     transmit_time = (transmit_time + TimeSpan(0, irid_freq_hrs, 0, 0));//Update next Iridium transmit time by 'irid_freq_hrs'
   }
 
+  digitalWrite(PeriSetPin, HIGH);//Drive set pin high
+  delay(50);//Required delay
+  digitalWrite(PeriSetPin, LOW);//Drive set pin LOW (latched)
+  delay(200);//Let settle  
+  
   distance = read_sensor(sample_n);//Read N average ranging distance from MaxBotix ultrasonic ranger
 
   if (metrics.charAt(0) == 'E')//If the first letter of the metrics letter code is 'E', i.e., snow_depth_mm, otherwise its 'A', i.e., stage_mm
@@ -321,12 +337,8 @@ void loop(void)//Code executes repeatedly until loss of power
     distance = ultrasonic_height_mm[0] - distance;//Compute snow depth from distance 
   }
 
-  digitalWrite(PeriSetPin, HIGH);//Drive set pin high
-  delay(50);//Required delay
-  digitalWrite(PeriSetPin, LOW);//Drive set pin LOW (latched)
-  delay(200);//Let settle  
 
-  if (!sht31.begin(0x44)) { // Start SHT30, Set to 0x45 for alternate i2c addr (2-sec flash led means SHT30 did not initialize)
+ if (!aht.begin()) { // Start AHT20 (2-sec flash led means SHT30 did not initialize)
     digitalWrite(led, HIGH);
     delay(5000);
     digitalWrite(led, LOW);
@@ -334,23 +346,13 @@ void loop(void)//Code executes repeatedly until loss of power
   }
 
 
-  temp_deg_c = sht31.readTemperature();//Get temp. reading from SHT30
-  rh_prct = sht31.readHumidity();//Get RH reading from SHT30
-
-  if (rh_prct>=90.0)//If possible condensation, activate heater and retake humidity measurement
-  {
-    sht31.heater(true);//Turn on SHT30 heater
-    delay(8000);//Give some time for heater to warm up
-    sht31.heater(false);//Turn of heater
-    delay(1000);
-    rh_prct = sht31.readHumidity();//Retake RH sample
-  }
+  aht.getEvent(&rh_prct, &temp_deg_c);// populate temp and humidity objects with fresh data
 
   digitalWrite(PeriUnsetPin, HIGH);//Drive unset pin HIGH
   delay(50);//required delay
   digitalWrite(PeriUnsetPin, LOW);//Drive unset pin LOW (latched)
 
-  String datastring = present_time.timestamp() + "," + distance + "," + temp_deg_c + "," + rh_prct;//Assemble datastring 
+  String datastring = present_time.timestamp() + "," + distance + "," + temp_deg_c.temperature + "," + rh_prct.relative_humidity;//Assemble datastring 
 
   if (!SD.exists(filestr.c_str()))//Write header if first time writing to the logfile
   {
