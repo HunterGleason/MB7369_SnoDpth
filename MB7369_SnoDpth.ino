@@ -6,16 +6,18 @@
 #include <IridiumSBD.h> //Needed for communication with IRIDIUM modem 
 #include <CSV_Parser.h> //Needed for parsing CSV data
 #include <Adafruit_AHTX0.h> //Needed for communicating with  AHT20
-#include <QuickStats.h>//Needed for commuting median
+#include <QuickStats.h>//Needed for computing median
 
 /*Define global constants*/
 const byte led = 13; // Built in led pin
 const byte chipSelect = 4; // Chip select pin for SD card
 const byte irid_pwr_pin = 6; // Power base PN2222 transistor pin to Iridium modem
 const byte PeriSetPin = 5; //Power relay set pin for all 3.3V peripheral
-const byte PeriUnsetPin = 9; //Power relay unset pin for all 3.3V peripheral
+const byte PeriUnsetPin = 11; //Power relay unset pin for all 3.3V peripheral
 const byte pulsePin = 12; //Pulse width pin for reading pw from MaxBotix MB7369 ultrasonic ranger
 const byte triggerPin = 10; //Range start / stop pin for MaxBotix MB7369 ultrasonic ranger
+const byte vbatPin = 9; //Pin for reading battery voltage when powered via JST
+const int alogRes = 12; //Define anlog read resolution as 12 bit
 
 /*Define global vars */
 char **filename; // Name of log file(Read from PARAM.txt)
@@ -36,7 +38,7 @@ char **metrics_letter_code;// Three letter code for Iridium string, e.g., 'A' fo
 String metrics; //String for representing dist_letter_code
 int32_t distance; //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
 int32_t duration; //Variable for holding pulse width duration read from MaxBotix ultrasonic ranger
-sensors_event_t rh_prct, temp_deg_c; //Variable for holding AHT20 temp and RH vals
+sensors_event_t rh_prct, temp_deg_c; //Variables for holding AHT20 temp and RH vals
 
 
 /*Define Iridium seriel communication as Serial1 */
@@ -77,6 +79,17 @@ int16_t read_sensor(int sample_n) {//Function for averaging N readings from MaxB
   return med_distance;//Return the median distance, average too noisy with ultrasonics
 }
 
+//Reads battery voltage on a Adalogger M0 (assumes 12-bit alog res)
+float read_vbat()
+{
+  float measuredvbat = analogRead(vbatPin);
+  measuredvbat *= 2;    // we divided by 2, so multiply back
+  measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
+  measuredvbat /= 4096; // convert to voltage
+
+  return measuredvbat;
+}
+
 
 int send_hourly_data()//Function reads HOURLY.CSV and sends hourly averages over IRIDIUM, formatted as to be ingested by the Omineca CGI script / database
 {
@@ -109,7 +122,7 @@ int send_hourly_data()//Function reads HOURLY.CSV and sends hourly averages over
   air_temps = (float*)cp["air_temp_deg_c"];//populate air temps
   rhs = (float*)cp["rh_prct"];//populate RHs
 
-  String datastring = metrics + ":" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":";//Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
+  String datastring = metrics + ":" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":"+String(round(read_vbat()*100))+":";//Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
 
   int start_year = String(datetimes[0]).substring(0, 4).toInt();//year of first obs
   int start_month = String(datetimes[0]).substring(5, 7).toInt();//month of first obs
@@ -205,6 +218,7 @@ int send_hourly_data()//Function reads HOURLY.CSV and sends hourly averages over
     start_dt = intvl_dt;//Set intvl_dt to start_dt,i.e., next hour
   }
 
+  
   uint8_t dt_buffer[340];//Binary bufffer for iridium transmission (max allowed buffer size 340 bytes)
 
   int message_bytes = datastring.length();// Total bytes in Iridium message
@@ -262,6 +276,8 @@ void setup(void)//Setup section, runs once upon powering up the Feather M0
   pinMode(triggerPin, OUTPUT);//Set ultrasonic ranging trigger pin as OUTPUT
   digitalWrite(triggerPin, LOW);//Drive ultrasonic randing trigger pin LOW
   pinMode(pulsePin, INPUT);//Set ultrasonic pulse width pin as INPUT
+  pinMode(vbatPin,INPUT); //Set VBAT pin as INPUT
+  analogReadResolution(alogRes);//Set analog read resolution
 
   while (!SD.begin(chipSelect)) {//Make sure a SD is available (2-sec flash led means SD card did not initialize)
     digitalWrite(led, HIGH);
@@ -375,9 +391,9 @@ void loop(void)//Code executes repeatedly until loss of power
     {
       if (metrics.charAt(0) == 'E')//If first letter of metrics code is 'E', i.e., snow_depth_mm, write snow header
       {
-        dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct");
+        dataFile.println("datetime,snow_depth_mm,air_temp_deg_c,rh_prct,bat_v");
       } else {//stage_mm, 'A'
-        dataFile.println("datetime,stage_mm,air_temp_deg_c,rh_prct");//Write stage header
+        dataFile.println("datetime,stage_mm,air_temp_deg_c,rh_prct,bat_v");//Write stage header
       }
 
       dataFile.close();//Close the dataFile
@@ -388,7 +404,7 @@ void loop(void)//Code executes repeatedly until loss of power
     dataFile = SD.open(filestr.c_str(), FILE_WRITE);
     if (dataFile)
     {
-      dataFile.println(datastring);
+      dataFile.println(datastring+","+String(read_vbat()));
       dataFile.close();
     }
 
