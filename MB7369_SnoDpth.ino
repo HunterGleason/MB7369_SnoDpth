@@ -329,6 +329,7 @@ void setup(void)  //Setup section, runs once upon powering up the Feather M0
 
 void loop(void)  //Code executes repeatedly until loss of power
 {
+  vbat = read_vbat(); //Sample LiPo battery voltage
   present_time = rtc.now();  //Get the present datetime
 
   if (present_time >= transmit_time)  //If the presnet time has reached transmit_time send all data since last transmission averaged hourly
@@ -367,7 +368,7 @@ void loop(void)  //Code executes repeatedly until loss of power
   digitalWrite(PeriUnsetPin, LOW);   //Drive unset pin LOW (latched)
 
   String datastring = present_time.timestamp() + "," + distance + "," + temp_deg_c.temperature + "," + rh_prct.relative_humidity;  //Assemble datastring
-  vbat = read_vbat();
+
   
   if (!SD.exists(filestr.c_str()))  //Write header if first time writing to the logfile
   {
