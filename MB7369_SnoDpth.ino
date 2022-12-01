@@ -39,7 +39,7 @@ String metrics;                       //String for representing dist_letter_code
 int32_t distance;                     //Variable for holding distance read from MaxBotix MB7369 ultrasonic ranger
 int32_t duration;                     //Variable for holding pulse width duration read from MaxBotix ultrasonic ranger
 sensors_event_t rh_prct, temp_deg_c;  //Variables for holding AHT20 temp and RH vals
-
+float vbat;
 
 /*Define Iridium seriel communication as Serial1 */
 #define IridiumSerial Serial1
@@ -120,7 +120,7 @@ int send_hourly_data()  //Function reads HOURLY.CSV and sends hourly averages ov
   air_temps = (float *)cp["air_temp_deg_c"];  //populate air temps
   rhs = (float *)cp["rh_prct"];               //populate RHs
 
-  String datastring = metrics + ":" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":" + String(round(read_vbat() * 100)) + ":";  //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
+  String datastring = metrics + ":" + String(datetimes[0]).substring(0, 10) + ":" + String(datetimes[0]).substring(11, 13) + ":" + String(round(vbat * 100)) + ":";  //Formatted for CGI script >> sensor_letter_code:date_of_first_obs:hour_of_first_obs:data
 
   int start_year = String(datetimes[0]).substring(0, 4).toInt();             //year of first obs
   int start_month = String(datetimes[0]).substring(5, 7).toInt();            //month of first obs
@@ -160,7 +160,7 @@ int send_hourly_data()  //Function reads HOURLY.CSV and sends hourly averages ov
       //Get # of observation withing hrly interval
       if (obs_dt >= start_dt && obs_dt < intvl_dt)  //If obs datetime is withing the current hour interval
       {
-        N++
+        N++;
       }
     }
 
@@ -196,8 +196,8 @@ int send_hourly_data()  //Function reads HOURLY.CSV and sends hourly averages ov
     {
       //Compute hrly statistics
       median_depth = stats.median(hrly_snow_depths, counter);
-      mean_temp = stats.mean(hrly_air_temps,counter;
-      mean_rh = stats.mean(hrly_rh_prcts,counter;
+      mean_temp = stats.average(hrly_air_temps,counter);
+      mean_rh = stats.average(hrly_rh_prcts,counter);
 
       mean_temp = mean_temp * 10.0;//mean air temp, convert to int
       mean_rh = mean_rh * 10.0; //mean RH, convert to int
@@ -367,7 +367,8 @@ void loop(void)  //Code executes repeatedly until loss of power
   digitalWrite(PeriUnsetPin, LOW);   //Drive unset pin LOW (latched)
 
   String datastring = present_time.timestamp() + "," + distance + "," + temp_deg_c.temperature + "," + rh_prct.relative_humidity;  //Assemble datastring
-
+  vbat = read_vbat();
+  
   if (!SD.exists(filestr.c_str()))  //Write header if first time writing to the logfile
   {
     dataFile = SD.open(filestr.c_str(), FILE_WRITE);  //Open file under filestr name from parameter file
@@ -386,7 +387,7 @@ void loop(void)  //Code executes repeatedly until loss of power
     //Write datastring and close logfile on SD card
     dataFile = SD.open(filestr.c_str(), FILE_WRITE);
     if (dataFile) {
-      dataFile.println(datastring + "," + String(read_vbat()));
+      dataFile.println(datastring + "," + String(vbat));
       dataFile.close();
     }
   }
